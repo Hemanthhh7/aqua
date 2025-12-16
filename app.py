@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -30,17 +29,14 @@ def fetch_weather(lat, lon):
         "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
         "timezone": "auto"
     }
-    response = requests.get(url, params=params)
-    data = response.json()
+    data = requests.get(url, params=params).json()
 
-    df = pd.DataFrame({
+    return pd.DataFrame({
         "temperature": data["hourly"]["temperature_2m"],
         "humidity": data["hourly"]["relative_humidity_2m"],
         "dew_point": data["hourly"]["dewpoint_2m"],
         "pressure": data["hourly"]["surface_pressure"]
-    })
-
-    return df.dropna()
+    }).dropna()
 
 # -----------------------------------
 # WATER YIELD CALCULATION
@@ -57,7 +53,6 @@ def add_water_yield(df):
 # -----------------------------------
 @st.cache_resource
 def train_model():
-    # Use one city to build base model
     lat, lon = LOCATIONS["Hyderabad"]
 
     df = fetch_weather(lat, lon)
@@ -89,7 +84,10 @@ st.set_page_config(page_title="AquaGenesis", layout="centered")
 st.title("🌊 AquaGenesis")
 st.subheader("AI-Based Atmospheric Water Harvesting Predictor")
 
-st.markdown("Predict how much water can be extracted from air using **live weather data**.")
+st.markdown(
+    "This system predicts **atmospheric water harvesting potential** "
+    "using **live weather data** and **machine learning**."
+)
 
 # DROPDOWN INPUT
 city = st.selectbox("📍 Select Location", list(LOCATIONS.keys()))
@@ -108,12 +106,4 @@ if st.button("Predict Water Yield"):
 
     st.success(f"Location: {city}")
     st.metric(
-        label="Predicted Water Yield (Liters / m² / day)",
-        value=round(latest_yield, 3)
-    )
-
-    st.caption(f"Model MAE: {round(mae, 4)}")
-
-    # GRAPH
-    st.subheader("📈 Water Yield Trend")
-    st.line_chart(df_live["water_yield"])
+        "Predicted Water Yiel
