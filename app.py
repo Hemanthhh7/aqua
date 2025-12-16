@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-import numpy as np
 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -19,7 +18,7 @@ LOCATIONS = {
 }
 
 # -----------------------------------
-# FETCH LIVE WEATHER DATA
+# FETCH LIVE WEATHER DATA (OPEN-METEO)
 # -----------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
@@ -29,81 +28,11 @@ def fetch_weather(lat, lon):
         "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
         "timezone": "auto"
     }
-    data = requests.get(url, params=params).json()
 
-    return pd.DataFrame({
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    df = pd.DataFrame({
         "temperature": data["hourly"]["temperature_2m"],
         "humidity": data["hourly"]["relative_humidity_2m"],
-        "dew_point": data["hourly"]["dewpoint_2m"],
-        "pressure": data["hourly"]["surface_pressure"]
-    }).dropna()
-
-# -----------------------------------
-# WATER YIELD CALCULATION
-# -----------------------------------
-def add_water_yield(df):
-    df["water_yield"] = (
-        (df["humidity"] / 100) *
-        (df["temperature"] - df["dew_point"]) * 0.1
-    )
-    return df
-
-# -----------------------------------
-# TRAIN AI MODEL (RUNS ONCE)
-# -----------------------------------
-@st.cache_resource
-def train_model():
-    lat, lon = LOCATIONS["Hyderabad"]
-
-    df = fetch_weather(lat, lon)
-    df = add_water_yield(df)
-
-    X = df[["temperature", "humidity", "dew_point", "pressure"]]
-    y = df["water_yield"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
-    model = RandomForestRegressor(
-        n_estimators=100,
-        random_state=42
-    )
-    model.fit(X_train, y_train)
-
-    mae = mean_absolute_error(y_test, model.predict(X_test))
-    return model, mae
-
-model, mae = train_model()
-
-# -----------------------------------
-# STREAMLIT UI
-# -----------------------------------
-st.set_page_config(page_title="AquaGenesis", layout="centered")
-
-st.title("🌊 AquaGenesis")
-st.subheader("AI-Based Atmospheric Water Harvesting Predictor")
-
-st.markdown(
-    "This system predicts **atmospheric water harvesting potential** "
-    "using **live weather data** and **machine learning**."
-)
-
-# DROPDOWN INPUT
-city = st.selectbox("📍 Select Location", list(LOCATIONS.keys()))
-
-# BUTTON
-if st.button("Predict Water Yield"):
-    lat, lon = LOCATIONS[city]
-
-    df_live = fetch_weather(lat, lon)
-    df_live = add_water_yield(df_live)
-
-    X_live = df_live[["temperature", "humidity", "dew_point", "pressure"]]
-    predictions = model.predict(X_live)
-
-    latest_yield = predictions[-1]
-
-    st.success(f"Location: {city}")
-    st.metric(
-        "Predicted Water Yiel
+        "
