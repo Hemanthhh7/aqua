@@ -6,9 +6,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
 
-# -----------------------------------
-# MULTI-LOCATION LIST (DROPDOWN)
-# -----------------------------------
+# -------------------------------
+# MULTI-LOCATION LIST
+# -------------------------------
 LOCATIONS = {
     "Hyderabad": (17.3850, 78.4867),
     "Delhi": (28.6139, 77.2090),
@@ -17,9 +17,9 @@ LOCATIONS = {
     "Bangalore": (12.9716, 77.5946)
 }
 
-# -----------------------------------
-# FETCH LIVE WEATHER DATA (OPEN-METEO)
-# -----------------------------------
+# -------------------------------
+# FETCH WEATHER DATA
+# -------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -29,21 +29,18 @@ def fetch_weather(lat, lon):
         "timezone": "auto"
     }
 
-    response = requests.get(url, params=params)
-    data = response.json()
+    data = requests.get(url, params=params).json()
 
-    df = pd.DataFrame({
+    return pd.DataFrame({
         "temperature": data["hourly"]["temperature_2m"],
         "humidity": data["hourly"]["relative_humidity_2m"],
         "dew_point": data["hourly"]["dewpoint_2m"],
         "pressure": data["hourly"]["surface_pressure"]
-    })
+    }).dropna()
 
-    return df.dropna()
-
-# -----------------------------------
-# WATER YIELD CALCULATION
-# -----------------------------------
+# -------------------------------
+# WATER YIELD FORMULA
+# -------------------------------
 def add_water_yield(df):
     df["water_yield"] = (
         (df["humidity"] / 100) *
@@ -51,15 +48,14 @@ def add_water_yield(df):
     )
     return df
 
-# -----------------------------------
-# TRAIN ML MODEL (RUNS ONCE)
-# -----------------------------------
+# -------------------------------
+# TRAIN MODEL (ONCE)
+# -------------------------------
 @st.cache_resource
 def train_model():
     lat, lon = LOCATIONS["Hyderabad"]
 
-    df = fetch_weather(lat, lon)
-    df = add_water_yield(df)
+    df = add_water_yield(fetch_weather(lat, lon))
 
     X = df[["temperature", "humidity", "dew_point", "pressure"]]
     y = df["water_yield"]
@@ -79,43 +75,29 @@ def train_model():
 
 model, mae = train_model()
 
-# -----------------------------------
-# STREAMLIT UI
-# -----------------------------------
-st.set_page_config(page_title="AquaGenesis", layout="centered")
+# -------------------------------
+# UI
+# -------------------------------
+st.set_page_config(page_title="AquaGenesis")
 
 st.title("🌊 AquaGenesis")
 st.subheader("AI-Based Atmospheric Water Harvesting Predictor")
 
-st.markdown(
-    "This system predicts **atmospheric water harvesting potential** "
-    "using **live weather data** and **machine learning**, "
-    "without any physical sensors."
-)
+city = st.selectbox("Select Location", list(LOCATIONS.keys()))
 
-# DROPDOWN INPUT
-city = st.selectbox("📍 Select Location", list(LOCATIONS.keys()))
-
-# BUTTON ACTION
 if st.button("Predict Water Yield"):
     lat, lon = LOCATIONS[city]
 
-    df_live = fetch_weather(lat, lon)
-    df_live = add_water_yield(df_live)
-
+    df_live = add_water_yield(fetch_weather(lat, lon))
     X_live = df_live[["temperature", "humidity", "dew_point", "pressure"]]
-    predictions = model.predict(X_live)
 
-    latest_yield = predictions[-1]
+    prediction = model.predict(X_live)[-1]
 
-    st.success(f"Location Selected: {city}")
-
+    st.success(f"Location: {city}")
     st.metric(
-        label="Predicted Water Yield (Liters / m² / day)",
-        value=round(latest_yield, 3)
+        "Predicted Water Yield (L/m²/day)",
+        round(prediction, 3)
     )
 
-    st.caption(f"Model Mean Absolute Error (MAE): {round(mae, 4)}")
-
-    st.subheader("📈 Water Yield Trend")
+    st.caption(f"Model MAE: {round(mae, 4)}")
     st.line_chart(df_live["water_yield"])
