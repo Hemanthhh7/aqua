@@ -45,7 +45,7 @@ LOCATIONS = {
 }
 
 # -------------------------------------------------
-# FETCH LIVE WEATHER DATA (WITH TIME)
+# FETCH LIVE WEATHER DATA
 # -------------------------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
@@ -58,17 +58,15 @@ def fetch_weather(lat, lon):
     data = requests.get(url, params=params).json()
 
     df = pd.DataFrame({
-        "datetime": pd.to_datetime(data["hourly"]["time"]),
         "temperature": data["hourly"]["temperature_2m"],
         "humidity": data["hourly"]["relative_humidity_2m"],
         "dew_point": data["hourly"]["dewpoint_2m"],
         "pressure": data["hourly"]["surface_pressure"]
     })
-
     return df.dropna()
 
 # -------------------------------------------------
-# WATER YIELD ESTIMATION
+# WATER YIELD ESTIMATION (ASSUMED PHYSICAL MODEL)
 # -------------------------------------------------
 def add_water_yield(df):
     df["water_yield"] = (
@@ -98,7 +96,7 @@ def train_models():
     X = df[["temperature", "humidity", "dew_point", "pressure"]]
     y = df["water_yield"]
 
-    # XGBoost
+    # ---- XGBOOST ----
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -112,7 +110,7 @@ def train_models():
     xgb.fit(X_train, y_train)
     mae_xgb = mean_absolute_error(y_test, xgb.predict(X_test))
 
-    # LSTM
+    # ---- LSTM ----
     X_seq, y_seq = create_sequences(X.values, y.values)
 
     lstm = Sequential([
@@ -128,7 +126,7 @@ def train_models():
 xgb_model, lstm_model, mae_xgb = train_models()
 
 # -------------------------------------------------
-# FEASIBILITY
+# FEASIBILITY CLASS
 # -------------------------------------------------
 def feasibility(y):
     if y > 1.2:
@@ -139,23 +137,25 @@ def feasibility(y):
         return "Low Feasibility"
 
 # -------------------------------------------------
-# CONFIDENCE SCORE
+# CONFIDENCE SCORE (MODEL AGREEMENT)
 # -------------------------------------------------
 def confidence_score(p1, p2):
     diff = abs(p1 - p2)
     max_val = max(abs(p1), abs(p2), 0.001)
-    return max(0, min(100, 100 * (1 - diff / max_val)))
+    score = 100 * (1 - diff / max_val)
+    return max(0, min(100, score))
 
 # -------------------------------------------------
-# SENSITIVITY INDEX
+# SENSITIVITY INDEX (FEATURE IMPORTANCE)
 # -------------------------------------------------
 def get_sensitivity(model):
     features = ["Temperature", "Humidity", "Dew Point", "Pressure"]
     imp = model.feature_importances_
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "Parameter": features,
         "Sensitivity (%)": imp * 100
     }).sort_values(by="Sensitivity (%)", ascending=False)
+    return df
 
 # -------------------------------------------------
 # STREAMLIT UI
@@ -173,6 +173,7 @@ if st.button("Analyze"):
     df_live = add_water_yield(fetch_weather(lat, lon))
     X_live = df_live[["temperature", "humidity", "dew_point", "pressure"]]
 
+    # Predictions
     pred_xgb = xgb_model.predict(X_live)[-1]
     seq = X_live.values[-24:].reshape(1, 24, 4)
     pred_lstm = lstm_model.predict(seq)[0][0]
@@ -182,11 +183,8 @@ if st.button("Analyze"):
     conf = confidence_score(pred_xgb, pred_lstm)
     sens_df = get_sensitivity(xgb_model)
 
-    latest_time = df_live["datetime"].iloc[-1]
-
     # OUTPUTS
     st.success(f"State: {state}")
-    st.write(f"🕒 **Prediction Time:** {latest_time}")
 
     st.metric("Predicted Water Yield (L/m²/day)", round(final_pred, 3))
     st.info(f"Feasibility Class: {status}")
@@ -197,7 +195,5 @@ if st.button("Analyze"):
 
     st.caption(f"XGBoost MAE: {round(mae_xgb, 4)}")
 
-    st.subheader("Hourly Water Yield Trend (with Date & Time)")
-    st.line_chart(
-        df_live.set_index("datetime")["water_yield"]
-    )
+    st.subheader("Hourly Water Yield Trend")
+    st.line_chart(df_live["water_yield"])
