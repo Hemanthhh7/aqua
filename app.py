@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
@@ -11,10 +12,9 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 
 # -------------------------------------------------
-# INDIAN STATES (CAPITAL COORDINATES)
+# STATE COORDINATES
 # -------------------------------------------------
 LOCATIONS = {
-    "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
     "Telangana (Hyderabad)": (17.3850, 78.4867),
     "Tamil Nadu (Chennai)": (13.0827, 80.2707),
     "Karnataka (Bengaluru)": (12.9716, 77.5946),
@@ -24,7 +24,7 @@ LOCATIONS = {
 }
 
 # -------------------------------------------------
-# FETCH LIVE WEATHER DATA
+# FETCH LIVE WEATHER DATA (HOURLY)
 # -------------------------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
@@ -42,10 +42,11 @@ def fetch_weather(lat, lon):
         "dew_point": data["hourly"]["dewpoint_2m"],
         "pressure": data["hourly"]["surface_pressure"]
     })
+
     return df.dropna()
 
 # -------------------------------------------------
-# SIMPLE WATER YIELD ESTIMATION
+# SIMPLE WATER YIELD FORMULA (INTERPRETABLE)
 # -------------------------------------------------
 def add_water_yield(df):
     df["water_yield"] = (
@@ -55,7 +56,7 @@ def add_water_yield(df):
     return df
 
 # -------------------------------------------------
-# CREATE LSTM SEQUENCES
+# LSTM SEQUENCE CREATION
 # -------------------------------------------------
 def create_sequences(X, y, steps=24):
     Xs, ys = [], []
@@ -65,7 +66,7 @@ def create_sequences(X, y, steps=24):
     return np.array(Xs), np.array(ys)
 
 # -------------------------------------------------
-# TRAIN MODELS (CACHED)
+# TRAIN MODELS (ONCE)
 # -------------------------------------------------
 @st.cache_resource
 def train_models():
@@ -115,8 +116,8 @@ st.subheader("Yesterday – Today – Tomorrow Water from Air")
 state = st.selectbox("Select State", list(LOCATIONS.keys()))
 
 if st.button("Analyze Water Availability"):
-    lat, lon = LOCATIONS[state]
 
+    lat, lon = LOCATIONS[state]
     df_live = add_water_yield(fetch_weather(lat, lon))
     X_live = df_live[["temperature", "humidity", "dew_point", "pressure"]]
 
@@ -126,7 +127,7 @@ if st.button("Analyze Water Availability"):
     pred_lstm = lstm_model.predict(seq)[0][0]
     present_pred = (pred_xgb + pred_lstm) / 2
 
-    # ---------------- FUTURE PREDICTION (NEXT 24 HOURS) ----------------
+    # ---------------- FUTURE (NEXT 24 HOURS) ----------------
     future_preds = []
     last_input = X_live.iloc[-1:].values
 
@@ -137,30 +138,61 @@ if st.button("Analyze Water Availability"):
     # =====================================================
     # GRAPH 1: PAST
     # =====================================================
-    st.subheader("📊 Past Water Availability (History)")
-    st.line_chart(df_live["water_yield"])
-    st.caption("This shows how water availability from air changed in the past.")
+    st.subheader("📊 Past Water Availability")
+
+    fig1, ax1 = plt.subplots()
+    ax1.plot(
+        range(len(df_live)),
+        df_live["water_yield"],
+        color="black"
+    )
+    ax1.set_title("Past Water Collected from Air")
+    ax1.set_xlabel("Time (Past Hours)")
+    ax1.set_ylabel("Water Collected (Litres per m² per day)")
+    ax1.grid(True)
+    st.pyplot(fig1)
+
+    st.caption("This graph shows how water availability from air changed in past hours.")
 
     # =====================================================
     # GRAPH 2: PRESENT
     # =====================================================
-    st.subheader("📍 Water Availability Now (Today)")
-    present_df = pd.DataFrame(
-        {"Water Available Now": [present_pred]}
+    st.subheader("📍 Water Availability Today")
+
+    fig2, ax2 = plt.subplots()
+    ax2.bar(
+        ["Today"],
+        [present_pred],
+        color="green"
     )
-    st.bar_chart(present_df)
-    st.caption("This shows how much water can be collected from air right now.")
+    ax2.set_title("Water Available from Air Today")
+    ax2.set_xlabel("Time")
+    ax2.set_ylabel("Water Collected (Litres per m² per day)")
+    ax2.grid(axis="y")
+    st.pyplot(fig2)
+
+    st.caption("This bar shows how much water can be collected from air right now.")
 
     # =====================================================
     # GRAPH 3: FUTURE
     # =====================================================
     st.subheader("🔮 Future Water Availability (Next 24 Hours)")
-    future_df = pd.DataFrame(
-        {"Expected Water": future_preds}
-    )
-    st.line_chart(future_df)
-    st.caption("This shows expected water availability in coming hours.")
 
-    # ---------------- EXTRA INFO ----------------
+    fig3, ax3 = plt.subplots()
+    ax3.plot(
+        range(1, 25),
+        future_preds,
+        linestyle="--",
+        color="blue"
+    )
+    ax3.set_title("Expected Water from Air in Next 24 Hours")
+    ax3.set_xlabel("Future Time (Hours)")
+    ax3.set_ylabel("Expected Water (Litres per m² per day)")
+    ax3.grid(True)
+    st.pyplot(fig3)
+
+    st.caption("This graph predicts how water availability may change in coming hours.")
+
+    # ---------------- SUMMARY ----------------
     st.metric("Current Water Yield (L/m²/day)", round(present_pred, 3))
     st.caption(f"Model Accuracy (XGBoost MAE): {round(mae_xgb, 4)}")
