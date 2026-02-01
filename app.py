@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
@@ -45,7 +46,7 @@ LOCATIONS = {
 }
 
 # -------------------------------------------------
-# FETCH LIVE WEATHER DATA
+# FETCH WEATHER DATA
 # -------------------------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
@@ -66,7 +67,7 @@ def fetch_weather(lat, lon):
     return df.dropna()
 
 # -------------------------------------------------
-# WATER YIELD ESTIMATION (ASSUMED PHYSICAL MODEL)
+# WATER YIELD ESTIMATION
 # -------------------------------------------------
 def add_water_yield(df):
     df["water_yield"] = (
@@ -76,7 +77,7 @@ def add_water_yield(df):
     return df
 
 # -------------------------------------------------
-# LSTM SEQUENCE CREATION
+# CREATE LSTM SEQUENCES
 # -------------------------------------------------
 def create_sequences(X, y, steps=24):
     Xs, ys = [], []
@@ -96,9 +97,8 @@ def train_models():
     X = df[["temperature", "humidity", "dew_point", "pressure"]]
     y = df["water_yield"]
 
-    # ---- XGBOOST ----
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        X, y, test_size=0.2, shuffle=False
     )
 
     xgb = XGBRegressor(
@@ -108,9 +108,8 @@ def train_models():
         random_state=42
     )
     xgb.fit(X_train, y_train)
-    mae_xgb = mean_absolute_error(y_test, xgb.predict(X_test))
+    mae = mean_absolute_error(y_test, xgb.predict(X_test))
 
-    # ---- LSTM ----
     X_seq, y_seq = create_sequences(X.values, y.values)
 
     lstm = Sequential([
@@ -121,79 +120,63 @@ def train_models():
     lstm.compile(optimizer="adam", loss="mae")
     lstm.fit(X_seq, y_seq, epochs=15, batch_size=16, verbose=0)
 
-    return xgb, lstm, mae_xgb
+    return xgb, lstm, mae
 
 xgb_model, lstm_model, mae_xgb = train_models()
-
-# -------------------------------------------------
-# FEASIBILITY CLASS
-# -------------------------------------------------
-def feasibility(y):
-    if y > 1.2:
-        return "High Feasibility"
-    elif y > 0.6:
-        return "Moderate Feasibility"
-    else:
-        return "Low Feasibility"
-
-# -------------------------------------------------
-# CONFIDENCE SCORE (MODEL AGREEMENT)
-# -------------------------------------------------
-def confidence_score(p1, p2):
-    diff = abs(p1 - p2)
-    max_val = max(abs(p1), abs(p2), 0.001)
-    score = 100 * (1 - diff / max_val)
-    return max(0, min(100, score))
-
-# -------------------------------------------------
-# SENSITIVITY INDEX (FEATURE IMPORTANCE)
-# -------------------------------------------------
-def get_sensitivity(model):
-    features = ["Temperature", "Humidity", "Dew Point", "Pressure"]
-    imp = model.feature_importances_
-    df = pd.DataFrame({
-        "Parameter": features,
-        "Sensitivity (%)": imp * 100
-    }).sort_values(by="Sensitivity (%)", ascending=False)
-    return df
 
 # -------------------------------------------------
 # STREAMLIT UI
 # -------------------------------------------------
 st.set_page_config(page_title="AquaGenesis", layout="centered")
-
 st.title("🌊 AquaGenesis")
-st.subheader("AI-Based Atmospheric Water Harvesting Decision Support System")
+st.subheader("Past – Present – Future Water Yield Prediction")
 
 state = st.selectbox("Select Indian State", list(LOCATIONS.keys()))
 
 if st.button("Analyze"):
     lat, lon = LOCATIONS[state]
-
     df_live = add_water_yield(fetch_weather(lat, lon))
     X_live = df_live[["temperature", "humidity", "dew_point", "pressure"]]
 
-    # Predictions
+    # Present prediction
     pred_xgb = xgb_model.predict(X_live)[-1]
     seq = X_live.values[-24:].reshape(1, 24, 4)
     pred_lstm = lstm_model.predict(seq)[0][0]
+    present_pred = (pred_xgb + pred_lstm) / 2
 
-    final_pred = (pred_xgb + pred_lstm) / 2
-    status = feasibility(final_pred)
-    conf = confidence_score(pred_xgb, pred_lstm)
-    sens_df = get_sensitivity(xgb_model)
+    # Future prediction (next 24 hours)
+    future_preds = []
+    last_input = X_live.iloc[-1:].values
 
-    # OUTPUTS
-    st.success(f"State: {state}")
+    for _ in range(24):
+        p = xgb_model.predict(last_input)[0]
+        future_preds.append(p)
 
-    st.metric("Predicted Water Yield (L/m²/day)", round(final_pred, 3))
-    st.info(f"Feasibility Class: {status}")
-    st.metric("Prediction Confidence (%)", round(conf, 1))
+    # -------------------------------------------------
+    # VISUALIZATION
+    # -------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10,4))
 
-    st.subheader("Sensitivity Index (Parameter Impact)")
-    st.table(sens_df)
+    ax.plot(df_live["water_yield"], label="Past (Actual)", color="black")
+    ax.axhline(present_pred, color="blue", linestyle="--", label="Present Prediction")
+    ax.plot(
+        range(len(df_live), len(df_live) + 24),
+        future_preds,
+        linestyle="--",
+        color="red",
+        label="Future Prediction"
+    )
 
+    ax.set_xlabel("Time (Hourly)")
+    ax.set_ylabel("Water Yield (L/m²/day)")
+    ax.set_title("Past – Present – Future Water Yield Trend")
+    ax.legend()
+    ax.grid(True)
+
+    st.pyplot(fig)
+
+    # -------------------------------------------------
+    # OUTPUT METRICS
+    # -------------------------------------------------
+    st.metric("Predicted Water Yield (L/m²/day)", round(present_pred, 3))
     st.caption(f"XGBoost MAE: {round(mae_xgb, 4)}")
-
-    st.subheader("Hourly Water Yield Trend")
-    st.line_chart(df_live["water_yield"])
