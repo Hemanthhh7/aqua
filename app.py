@@ -8,7 +8,7 @@ from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 
 # -------------------------------------------------
-# ALL INDIAN STATES (CAPITAL COORDINATES)
+# ALL INDIAN STATES WITH CAPITAL COORDINATES
 # -------------------------------------------------
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
@@ -42,7 +42,7 @@ STATES = {
 }
 
 # -------------------------------------------------
-# FETCH LIVE WEATHER (HOURLY)
+# FETCH LIVE WEATHER DATA (HOURLY)
 # -------------------------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
@@ -60,10 +60,11 @@ def fetch_weather(lat, lon):
         "dew_point": data["hourly"]["dewpoint_2m"],        # °C
         "pressure": data["hourly"]["surface_pressure"]     # hPa
     })
-    return df.dropna()
+
+    return df.dropna().reset_index(drop=True)
 
 # -------------------------------------------------
-# WATER YIELD FORMULA
+# WATER YIELD CALCULATION
 # UNIT: Litres / m² / day
 # -------------------------------------------------
 def calculate_water_yield(df):
@@ -74,7 +75,7 @@ def calculate_water_yield(df):
     return df
 
 # -------------------------------------------------
-# TRAIN MODEL (ONCE)
+# TRAIN MODEL (ONCE, USED FOR ALL STATES)
 # -------------------------------------------------
 @st.cache_resource
 def train_model():
@@ -104,53 +105,96 @@ model = train_model()
 st.set_page_config(page_title="AquaGenesis", layout="centered")
 
 st.title("🌊 AquaGenesis")
-st.subheader("State-wise Atmospheric Water Yield Prediction")
+st.subheader("Past – Present – Future Water Yield (State-wise)")
 
-st.write(
-    "This system predicts **how much water can be collected from air** "
-    "in **each Indian state**, using live weather data."
-)
+state = st.selectbox("Select Indian State", list(STATES.keys()))
 
-if st.button("Predict Water Yield for All States"):
+if st.button("Analyze Water Yield"):
 
-    results = []
+    lat, lon = STATES[state]
+    df = calculate_water_yield(fetch_weather(lat, lon))
 
-    for state, (lat, lon) in STATES.items():
-        df = calculate_water_yield(fetch_weather(lat, lon))
-        X_live = df[["temperature", "humidity", "dew_point", "pressure"]]
+    X_live = df[["temperature", "humidity", "dew_point", "pressure"]]
 
-        prediction = model.predict(X_live)[-1]
+    # ---------------- PRESENT ----------------
+    present_value = model.predict(X_live)[-1]
 
-        results.append({
-            "State": state,
-            "Water Yield (Litres / m² / day)": round(prediction, 3)
-        })
+    # ---------------- FUTURE (NEXT 6 HOURS) ----------------
+    future_hours = list(range(1, 7))
+    future_values = [present_value for _ in future_hours]
 
-    result_df = pd.DataFrame(results)
+    # =====================================================
+    # GRAPH 1: PAST
+    # =====================================================
+    st.subheader("📊 Past Water Availability")
 
-    # ---------------- TABLE ----------------
-    st.subheader("📋 State-wise Water Yield (Numerical)")
-    st.dataframe(result_df, use_container_width=True)
-
-    # ---------------- GRAPH ----------------
-    st.subheader("📊 State-wise Water Yield Comparison")
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    ax.barh(
-        result_df["State"],
-        result_df["Water Yield (Litres / m² / day)"],
-        color="skyblue"
+    fig1, ax1 = plt.subplots()
+    ax1.plot(
+        range(len(df)),
+        df["water_yield"],
+        marker="o"
     )
 
-    ax.set_xlabel("Water Yield (Litres per m² per day)")
-    ax.set_ylabel("Indian States")
-    ax.set_title("Comparison of Atmospheric Water Availability Across Indian States")
+    ax1.set_title(f"Past Water Availability – {state}")
+    ax1.set_xlabel("Time (Past Hours)")
+    ax1.set_ylabel("Water Yield (Litres per m² per day)")
+    ax1.grid(True)
 
-    st.pyplot(fig)
+    st.pyplot(fig1)
 
     st.caption(
-        "X-axis shows water that can be collected from air "
-        "(Litres per square meter per day). "
-        "Each bar represents one Indian state."
+        "X-axis shows past hours. Y-axis shows how much water could be collected from air."
+    )
+
+    # =====================================================
+    # GRAPH 2: PRESENT
+    # =====================================================
+    st.subheader("📍 Present Water Availability (Now)")
+
+    fig2, ax2 = plt.subplots()
+    ax2.bar(
+        ["Now"],
+        [present_value],
+        color="green"
+    )
+
+    ax2.set_title(f"Current Water Availability – {state}")
+    ax2.set_xlabel("Time (Current)")
+    ax2.set_ylabel("Water Yield (Litres per m² per day)")
+    ax2.grid(axis="y")
+
+    st.pyplot(fig2)
+
+    st.caption(
+        "This bar shows how much water can be collected from air right now."
+    )
+
+    # =====================================================
+    # GRAPH 3: FUTURE
+    # =====================================================
+    st.subheader("🔮 Future Water Availability")
+
+    fig3, ax3 = plt.subplots()
+    ax3.plot(
+        future_hours,
+        future_values,
+        linestyle="--",
+        marker="o"
+    )
+
+    ax3.set_title(f"Expected Water Availability – Next 6 Hours ({state})")
+    ax3.set_xlabel("Future Time (Hours Ahead)")
+    ax3.set_ylabel("Expected Water Yield (Litres per m² per day)")
+    ax3.grid(True)
+
+    st.pyplot(fig3)
+
+    st.caption(
+        "X-axis shows future hours. Y-axis shows expected water availability from air."
+    )
+
+    # ---------------- SUMMARY ----------------
+    st.metric(
+        "Current Water Yield",
+        f"{round(present_value, 3)} Litres / m² / day"
     )
