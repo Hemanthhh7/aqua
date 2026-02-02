@@ -2,11 +2,13 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 
 # -------------------------------------------------
-# ALL INDIAN STATES WITH CAPITAL COORDINATES
+# ALL INDIAN STATES (CAPITAL COORDINATES)
 # -------------------------------------------------
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
@@ -58,11 +60,10 @@ def fetch_weather(lat, lon):
         "dew_point": data["hourly"]["dewpoint_2m"],        # °C
         "pressure": data["hourly"]["surface_pressure"]     # hPa
     })
-
     return df.dropna()
 
 # -------------------------------------------------
-# WATER YIELD CALCULATION
+# WATER YIELD FORMULA
 # UNIT: Litres / m² / day
 # -------------------------------------------------
 def calculate_water_yield(df):
@@ -73,7 +74,7 @@ def calculate_water_yield(df):
     return df
 
 # -------------------------------------------------
-# TRAIN XGBOOST MODEL (USING ONE LOCATION)
+# TRAIN MODEL (ONCE)
 # -------------------------------------------------
 @st.cache_resource
 def train_model():
@@ -103,11 +104,11 @@ model = train_model()
 st.set_page_config(page_title="AquaGenesis", layout="centered")
 
 st.title("🌊 AquaGenesis")
-st.subheader("Water Yield Prediction for All Indian States")
+st.subheader("State-wise Atmospheric Water Yield Prediction")
 
 st.write(
-    "This table shows **how much water can be collected from air** "
-    "in each Indian state using live weather data."
+    "This system predicts **how much water can be collected from air** "
+    "in **each Indian state**, using live weather data."
 )
 
 if st.button("Predict Water Yield for All States"):
@@ -122,15 +123,34 @@ if st.button("Predict Water Yield for All States"):
 
         results.append({
             "State": state,
-            "Predicted Water Yield (Litres / m² / day)": round(prediction, 3)
+            "Water Yield (Litres / m² / day)": round(prediction, 3)
         })
 
     result_df = pd.DataFrame(results)
 
-    st.subheader("📋 State-wise Water Yield Prediction")
+    # ---------------- TABLE ----------------
+    st.subheader("📋 State-wise Water Yield (Numerical)")
     st.dataframe(result_df, use_container_width=True)
 
+    # ---------------- GRAPH ----------------
+    st.subheader("📊 State-wise Water Yield Comparison")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    ax.barh(
+        result_df["State"],
+        result_df["Water Yield (Litres / m² / day)"],
+        color="skyblue"
+    )
+
+    ax.set_xlabel("Water Yield (Litres per m² per day)")
+    ax.set_ylabel("Indian States")
+    ax.set_title("Comparison of Atmospheric Water Availability Across Indian States")
+
+    st.pyplot(fig)
+
     st.caption(
-        "Higher value = more water can be collected from air. "
-        "Lower value = less water availability."
+        "X-axis shows water that can be collected from air "
+        "(Litres per square meter per day). "
+        "Each bar represents one Indian state."
     )
