@@ -2,26 +2,45 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error
 from xgboost import XGBRegressor
-
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from sklearn.model_selection import train_test_split
 
 # -------------------------------------------------
-# LOCATION
+# ALL INDIAN STATES WITH CAPITAL COORDINATES
 # -------------------------------------------------
-LOCATIONS = {
-    "Hyderabad": (17.3850, 78.4867),
-    "Chennai": (13.0827, 80.2707),
-    "Bengaluru": (12.9716, 77.5946),
+STATES = {
+    "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
+    "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
+    "Assam (Dispur)": (26.1408, 91.7900),
+    "Bihar (Patna)": (25.5941, 85.1376),
+    "Chhattisgarh (Raipur)": (21.2514, 81.6296),
+    "Goa (Panaji)": (15.4909, 73.8278),
+    "Gujarat (Gandhinagar)": (23.2156, 72.6369),
+    "Haryana (Chandigarh)": (30.7333, 76.7794),
+    "Himachal Pradesh (Shimla)": (31.1048, 77.1734),
+    "Jharkhand (Ranchi)": (23.3441, 85.3096),
+    "Karnataka (Bengaluru)": (12.9716, 77.5946),
+    "Kerala (Thiruvananthapuram)": (8.5241, 76.9366),
+    "Madhya Pradesh (Bhopal)": (23.2599, 77.4126),
+    "Maharashtra (Mumbai)": (19.0760, 72.8777),
+    "Manipur (Imphal)": (24.8170, 93.9368),
+    "Meghalaya (Shillong)": (25.5788, 91.8933),
+    "Mizoram (Aizawl)": (23.7271, 92.7176),
+    "Nagaland (Kohima)": (25.6751, 94.1086),
+    "Odisha (Bhubaneswar)": (20.2961, 85.8245),
+    "Punjab (Chandigarh)": (30.7333, 76.7794),
+    "Rajasthan (Jaipur)": (26.9124, 75.7873),
+    "Sikkim (Gangtok)": (27.3389, 88.6065),
+    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
+    "Telangana (Hyderabad)": (17.3850, 78.4867),
+    "Tripura (Agartala)": (23.8315, 91.2868),
+    "Uttar Pradesh (Lucknow)": (26.8467, 80.9462),
+    "Uttarakhand (Dehradun)": (30.3165, 78.0322),
+    "West Bengal (Kolkata)": (22.5726, 88.3639)
 }
 
 # -------------------------------------------------
-# FETCH WEATHER
+# FETCH LIVE WEATHER (HOURLY)
 # -------------------------------------------------
 def fetch_weather(lat, lon):
     url = "https://api.open-meteo.com/v1/forecast"
@@ -34,151 +53,84 @@ def fetch_weather(lat, lon):
     data = requests.get(url, params=params).json()
 
     df = pd.DataFrame({
-        "temperature": data["hourly"]["temperature_2m"],
-        "humidity": data["hourly"]["relative_humidity_2m"],
-        "dew_point": data["hourly"]["dewpoint_2m"],
-        "pressure": data["hourly"]["surface_pressure"]
+        "temperature": data["hourly"]["temperature_2m"],   # °C
+        "humidity": data["hourly"]["relative_humidity_2m"],# %
+        "dew_point": data["hourly"]["dewpoint_2m"],        # °C
+        "pressure": data["hourly"]["surface_pressure"]     # hPa
     })
 
-    return df.dropna().reset_index(drop=True)
+    return df.dropna()
 
 # -------------------------------------------------
-# WATER FROM AIR (SIMPLE MEANING)
+# WATER YIELD CALCULATION
+# UNIT: Litres / m² / day
 # -------------------------------------------------
-def add_water_yield(df):
-    df["water_from_air"] = (
+def calculate_water_yield(df):
+    df["water_yield"] = (
         (df["humidity"] / 100) *
         (df["temperature"] - df["dew_point"]) * 0.1
     )
     return df
 
 # -------------------------------------------------
-# LSTM DATA
-# -------------------------------------------------
-def create_sequences(X, y, steps=24):
-    Xs, ys = [], []
-    for i in range(len(X) - steps):
-        Xs.append(X[i:i+steps])
-        ys.append(y[i+steps])
-    return np.array(Xs), np.array(ys)
-
-# -------------------------------------------------
-# TRAIN MODELS
+# TRAIN XGBOOST MODEL (USING ONE LOCATION)
 # -------------------------------------------------
 @st.cache_resource
-def train_models():
-    lat, lon = LOCATIONS["Hyderabad"]
-    df = add_water_yield(fetch_weather(lat, lon))
+def train_model():
+    lat, lon = STATES["Telangana (Hyderabad)"]
+    df = calculate_water_yield(fetch_weather(lat, lon))
 
     X = df[["temperature", "humidity", "dew_point", "pressure"]]
-    y = df["water_from_air"]
+    y = df["water_yield"]
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train, _, y_train, _ = train_test_split(
         X, y, test_size=0.2, shuffle=False
     )
 
-    xgb = XGBRegressor(
+    model = XGBRegressor(
         n_estimators=150,
         learning_rate=0.05,
         max_depth=5
     )
-    xgb.fit(X_train, y_train)
+    model.fit(X_train, y_train)
+    return model
 
-    X_seq, y_seq = create_sequences(X.values, y.values)
-
-    lstm = Sequential([
-        LSTM(32, input_shape=(X_seq.shape[1], X_seq.shape[2])),
-        Dense(1)
-    ])
-    lstm.compile(optimizer="adam", loss="mae")
-    lstm.fit(X_seq, y_seq, epochs=10, verbose=0)
-
-    return xgb, lstm
-
-xgb_model, lstm_model = train_models()
+model = train_model()
 
 # -------------------------------------------------
-# UI
+# STREAMLIT UI
 # -------------------------------------------------
+st.set_page_config(page_title="AquaGenesis", layout="centered")
+
 st.title("🌊 AquaGenesis")
-st.subheader("Simple Explanation: Time vs Water from Air")
+st.subheader("Water Yield Prediction for All Indian States")
 
-city = st.selectbox("Choose City", list(LOCATIONS.keys()))
+st.write(
+    "This table shows **how much water can be collected from air** "
+    "in each Indian state using live weather data."
+)
 
-if st.button("Show Water Information"):
+if st.button("Predict Water Yield for All States"):
 
-    lat, lon = LOCATIONS[city]
-    df = add_water_yield(fetch_weather(lat, lon))
+    results = []
 
-    # ---------------- PRESENT ----------------
-    X_live = df[["temperature", "humidity", "dew_point", "pressure"]]
-    present_xgb = xgb_model.predict(X_live)[-1]
-    seq = X_live.values[-24:].reshape(1, 24, 4)
-    present_lstm = lstm_model.predict(seq)[0][0]
-    present_value = (present_xgb + present_lstm) / 2
+    for state, (lat, lon) in STATES.items():
+        df = calculate_water_yield(fetch_weather(lat, lon))
+        X_live = df[["temperature", "humidity", "dew_point", "pressure"]]
 
-    # ---------------- FUTURE ----------------
-    future_values = [present_value for _ in range(6)]
+        prediction = model.predict(X_live)[-1]
 
-    # =================================================
-    # GRAPH 1: PAST
-    # =================================================
-    st.subheader("1️⃣ PAST: Earlier Hours")
+        results.append({
+            "State": state,
+            "Predicted Water Yield (Litres / m² / day)": round(prediction, 3)
+        })
 
-    fig1, ax1 = plt.subplots()
-    ax1.plot(
-        range(1, len(df)+1),
-        df["water_from_air"],
-        marker="o"
-    )
+    result_df = pd.DataFrame(results)
 
-    ax1.set_xlabel("Time Moving Forward (Earlier Hours →)")
-    ax1.set_ylabel("Water from Air (Higher = More Water)")
-    ax1.set_title("How Water from Air Changed Earlier")
+    st.subheader("📋 State-wise Water Yield Prediction")
+    st.dataframe(result_df, use_container_width=True)
 
-    st.pyplot(fig1)
-
-    st.write(
-        "👉 When the line goes UP, more water was available. "
-        "When it goes DOWN, less water was available."
-    )
-
-    # =================================================
-    # GRAPH 2: PRESENT
-    # =================================================
-    st.subheader("2️⃣ PRESENT: Right Now")
-
-    fig2, ax2 = plt.subplots()
-    ax2.bar(["Now"], [present_value], color="green")
-
-    ax2.set_ylabel("Water from Air (Higher = More Water)")
-    ax2.set_title("Water Available from Air Right Now")
-
-    st.pyplot(fig2)
-
-    st.write(
-        "👉 This bar shows how much water can be collected from air at this moment."
-    )
-
-    # =================================================
-    # GRAPH 3: FUTURE
-    # =================================================
-    st.subheader("3️⃣ FUTURE: Next Few Hours")
-
-    fig3, ax3 = plt.subplots()
-    ax3.plot(
-        range(1, 7),
-        future_values,
-        linestyle="--",
-        marker="o"
-    )
-
-    ax3.set_xlabel("Future Time (Next Hours →)")
-    ax3.set_ylabel("Expected Water from Air")
-    ax3.set_title("Expected Water from Air in Coming Hours")
-
-    st.pyplot(fig3)
-
-    st.write(
-        "👉 This line shows how water availability is expected to be in the next hours."
+    st.caption(
+        "Higher value = more water can be collected from air. "
+        "Lower value = less water availability."
     )
