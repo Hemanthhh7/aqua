@@ -1,4 +1,4 @@
-import streamlit as st 
+import streamlit as st
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -11,12 +11,33 @@ from sklearn.model_selection import train_test_split
 # -------------------------------------------------
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
-    "Telangana (Hyderabad)": (17.3850, 78.4867),
-    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
+    "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
+    "Assam (Dispur)": (26.1408, 91.7900),
+    "Bihar (Patna)": (25.5941, 85.1376),
+    "Chhattisgarh (Raipur)": (21.2514, 81.6296),
+    "Goa (Panaji)": (15.4909, 73.8278),
+    "Gujarat (Gandhinagar)": (23.2156, 72.6369),
+    "Haryana (Chandigarh)": (30.7333, 76.7794),
+    "Himachal Pradesh (Shimla)": (31.1048, 77.1734),
+    "Jharkhand (Ranchi)": (23.3441, 85.3096),
     "Karnataka (Bengaluru)": (12.9716, 77.5946),
+    "Kerala (Thiruvananthapuram)": (8.5241, 76.9366),
+    "Madhya Pradesh (Bhopal)": (23.2599, 77.4126),
     "Maharashtra (Mumbai)": (19.0760, 72.8777),
+    "Manipur (Imphal)": (24.8170, 93.9368),
+    "Meghalaya (Shillong)": (25.5788, 91.8933),
+    "Mizoram (Aizawl)": (23.7271, 92.7176),
+    "Nagaland (Kohima)": (25.6751, 94.1086),
+    "Odisha (Bhubaneswar)": (20.2961, 85.8245),
+    "Punjab (Chandigarh)": (30.7333, 76.7794),
     "Rajasthan (Jaipur)": (26.9124, 75.7873),
-    "West Bengal (Kolkata)": (22.5726, 88.3639),
+    "Sikkim (Gangtok)": (27.3389, 88.6065),
+    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
+    "Telangana (Hyderabad)": (17.3850, 78.4867),
+    "Tripura (Agartala)": (23.8315, 91.2868),
+    "Uttar Pradesh (Lucknow)": (26.8467, 80.9462),
+    "Uttarakhand (Dehradun)": (30.3165, 78.0322),
+    "West Bengal (Kolkata)": (22.5726, 88.3639)
 }
 
 # -------------------------------------------------
@@ -83,91 +104,72 @@ model = train_model()
 # -------------------------------------------------
 # UI
 # -------------------------------------------------
-st.title("🌊 AquaGenesis – Intelligent AWH Decision Support Platform")
-state = st.selectbox("Select Location", list(STATES.keys()))
+st.title("🌊 AquaGenesis – Decision Support System")
+state = st.selectbox("Select Indian State", list(STATES.keys()))
 
-if st.button("Run Full Professional Analysis"):
+if st.button("Run Full Analysis"):
     lat, lon = STATES[state]
 
-    # DATA
+    # PAST
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=7)
     past = add_water_yield(fetch_past_weather(lat, lon, start, end))
+
+    # PRESENT
     present = past["water_yield"].iloc[-1]
+
+    # FUTURE
     future = add_water_yield(fetch_future_weather(lat, lon))
     hours = list(range(1, len(future)+1))
 
-    # -------------------------------------------------
-    # FEASIBILITY
-    # -------------------------------------------------
+    # ---------------- FEASIBILITY ----------------
     if present > 0.5:
-        feasibility = "HIGH"
-        score = 80
+        feasibility = "🟢 HIGH – Suitable for installation"
     elif present > 0.3:
-        feasibility = "MODERATE"
-        score = 55
+        feasibility = "🟡 MODERATE – Seasonal use recommended"
     else:
-        feasibility = "LOW"
-        score = 25
+        feasibility = "🔴 LOW – Not recommended"
 
-    # -------------------------------------------------
-    # SUITABILITY INDEX
-    # -------------------------------------------------
-    suitability_index = min(100, round(score + (future["water_yield"].mean()*20), 2))
+    # ---------------- BEST TIME ----------------
+    best_hour = future["water_yield"].idxmax() + 1
 
-    # -------------------------------------------------
-    # ROLE CLASSIFICATION
-    # -------------------------------------------------
-    if suitability_index > 70:
-        role = "Primary Water Source"
-    elif suitability_index > 40:
-        role = "Seasonal / Supplementary Use"
-    else:
-        role = "Emergency / Auxiliary Use Only"
+    # ---------------- ENERGY TRADEOFF ----------------
+    energy_ratio = round(present * 3.2, 2)  # approx
 
-    # -------------------------------------------------
-    # HUMAN CONTEXT
-    # -------------------------------------------------
-    drinking_need = 4  # litres/day/person
-    required_area = round(drinking_need / max(present, 0.01), 2)
+    # ---------------- ALERT ----------------
+    alert = "⚠️ Low water availability expected" if future["water_yield"].mean() < 0.3 else "✅ Conditions are favorable"
 
-    # -------------------------------------------------
-    # FAILURE REASON
-    # -------------------------------------------------
-    imp = model.feature_importances_
-    dominant_factor = ["Temperature", "Humidity", "Dew Point", "Pressure"][imp.argmax()]
+    # ---------------- EXPLAINABILITY ----------------
+    imp = pd.DataFrame({
+        "Factor": ["Temperature", "Humidity", "Dew Point", "Pressure"],
+        "Impact (%)": model.feature_importances_ * 100
+    }).sort_values(by="Impact (%)", ascending=False)
 
-    # -------------------------------------------------
-    # OUTPUT
-    # -------------------------------------------------
-    st.subheader("📊 Historical Water Yield Pattern")
+    # ---------------- OUTPUT ----------------
+    st.subheader("📊 Past Water Availability")
     st.line_chart(past.set_index("time")["water_yield"])
 
-    st.metric("Current Predicted Water Yield (L/m²/day)", round(present, 3))
-    st.success(f"Deployment Feasibility: {feasibility}")
-    st.metric("AWH Suitability Index (0–100)", suitability_index)
+    st.metric("💧 Current Water Yield (L/m²/day)", round(present, 3))
+    st.success(feasibility)
 
-    st.subheader("🔮 Short-Term Forecast")
+    st.subheader("🔮 Future Water Availability (Hours Ahead)")
     fig, ax = plt.subplots()
     ax.plot(hours, future["water_yield"], marker="o")
     ax.set_xlabel("Hours Ahead")
     ax.set_ylabel("Water Yield (L/m²/day)")
     st.pyplot(fig)
 
-    st.subheader("🧠 System Role Recommendation")
-    st.info(f"Recommended Role: {role}")
+    st.info(f"⏰ Best harvesting time: after **{best_hour} hour(s)**")
+    st.info(f"⚡ Energy–Water Tradeoff: ~{energy_ratio} litres per unit electricity")
+    st.warning(alert)
 
-    st.subheader("👤 Human Water Context")
-    st.write(f"To meet minimum drinking requirement (~4L/day), approximately **{required_area} m²** AWH surface area is required per person.")
+    st.subheader("🔍 Explainability (Why this prediction?)")
+    st.table(imp)
 
-    st.subheader("⚠ Deployment Risk Insight")
-    st.write(f"Primary influencing factor detected: **{dominant_factor}**")
-    st.write("Low yield is climate-driven, not model uncertainty.")
-
-    st.subheader("🏁 Final System Decision")
-    if suitability_index < 40:
-        st.error("❌ NO-GO for standalone AWH deployment.")
-    elif suitability_index < 70:
-        st.warning("⚠ Limited deployment recommended with hybrid support.")
-    else:
-        st.success("✅ Suitable for standalone deployment.")
+    st.subheader("🚧 Future Scope (Government Expansion)")
+    st.markdown("""
+    - District & Mandal-level mapping  
+    - Seasonal comparison (Summer / Monsoon / Winter)  
+    - Climate change impact (2030–2050)  
+    - Population water demand matching  
+    """)
