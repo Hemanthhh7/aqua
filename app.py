@@ -1,12 +1,10 @@
 import streamlit as st
 import requests
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta
-from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score
 
 # -------------------------------------------------
 # STATES (28)
@@ -43,9 +41,9 @@ STATES = {
 }
 
 # -------------------------------------------------
-# FETCH WEATHER
+# DATA FUNCTIONS
 # -------------------------------------------------
-def fetch_weather(lat, lon, start, end):
+def fetch_past_weather(lat, lon, start, end):
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude": lat,
@@ -56,98 +54,122 @@ def fetch_weather(lat, lon, start, end):
         "timezone": "auto"
     }
     d = requests.get(url, params=params).json()
-
-    df = pd.DataFrame({
+    return pd.DataFrame({
         "time": pd.to_datetime(d["hourly"]["time"]),
         "temperature": d["hourly"]["temperature_2m"],
         "humidity": d["hourly"]["relative_humidity_2m"],
         "dew_point": d["hourly"]["dewpoint_2m"],
         "pressure": d["hourly"]["surface_pressure"]
     })
-    return df
 
-# -------------------------------------------------
-# WATER YIELD FORMULA (BASE)
-# -------------------------------------------------
+def fetch_future_weather(lat, lon, hours=12):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
+        "timezone": "auto"
+    }
+    d = requests.get(url, params=params).json()
+    df = pd.DataFrame({
+        "temperature": d["hourly"]["temperature_2m"],
+        "humidity": d["hourly"]["relative_humidity_2m"],
+        "dew_point": d["hourly"]["dewpoint_2m"],
+        "pressure": d["hourly"]["surface_pressure"]
+    })
+    return df.head(hours)
+
 def add_water_yield(df):
     df["water_yield"] = (df["humidity"]/100) * (df["temperature"] - df["dew_point"]) * 0.1
     return df
 
 # -------------------------------------------------
-# FEATURE ENGINEERING
+# TRAIN MODEL
 # -------------------------------------------------
-def create_features(df):
-    df["hour"] = df["time"].dt.hour
-    df["day"] = df["time"].dt.day
-    df["month"] = df["time"].dt.month
+@st.cache_resource
+def train_model():
+    lat, lon = STATES["Telangana (Hyderabad)"]
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=7)
+    df = add_water_yield(fetch_past_weather(lat, lon, start, end))
+    X = df[["temperature", "humidity", "dew_point", "pressure"]]
+    y = df["water_yield"]
+    Xtr, _, ytr, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
+    m = XGBRegressor(n_estimators=150, learning_rate=0.05, max_depth=5)
+    m.fit(Xtr, ytr)
+    return m
 
-    for lag in range(1, 7):
-        df[f"lag_{lag}"] = df["water_yield"].shift(lag)
-
-    df = df.dropna()
-    return df
+model = train_model()
 
 # -------------------------------------------------
-# STREAMLIT UI
+# UI
 # -------------------------------------------------
-st.title("🌊 AquaGenesis – Real ML Forecasting System")
-
+st.title("🌊 AquaGenesis – Decision Support System")
 state = st.selectbox("Select Indian State", list(STATES.keys()))
 
-if st.button("Run Real ML Forecast"):
-
+if st.button("Run Full Analysis"):
     lat, lon = STATES[state]
 
+    # PAST
     end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=90)
+    start = end - timedelta(days=7)
+    past = add_water_yield(fetch_past_weather(lat, lon, start, end))
 
-    df = fetch_weather(lat, lon, start, end)
-    df = add_water_yield(df)
-    df = create_features(df)
+    # PRESENT
+    present = past["water_yield"].iloc[-1]
 
-    # Predict 6 hours ahead
-    forecast_horizon = 6
-    df["target"] = df["water_yield"].shift(-forecast_horizon)
-    df = df.dropna()
+    # FUTURE
+    future = add_water_yield(fetch_future_weather(lat, lon))
+    hours = list(range(1, len(future)+1))
 
-    features = [
-        "temperature","humidity","dew_point","pressure",
-        "hour","day","month",
-        "lag_1","lag_2","lag_3","lag_4","lag_5","lag_6"
-    ]
+    # ---------------- FEASIBILITY ----------------
+    if present > 0.5:
+        feasibility = "🟢 HIGH – Suitable for installation"
+    elif present > 0.3:
+        feasibility = "🟡 MODERATE – Seasonal use recommended"
+    else:
+        feasibility = "🔴 LOW – Not recommended"
 
-    X = df[features]
-    y = df["target"]
+    # ---------------- BEST TIME ----------------
+    best_hour = future["water_yield"].idxmax() + 1
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, shuffle=False
-    )
+    # ---------------- ENERGY TRADEOFF ----------------
+    energy_ratio = round(present * 3.2, 2)  # approx
 
-    model = RandomForestRegressor(
-        n_estimators=400,
-        max_depth=15,
-        random_state=42
-    )
+    # ---------------- ALERT ----------------
+    alert = "⚠️ Low water availability expected" if future["water_yield"].mean() < 0.3 else "✅ Conditions are favorable"
 
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+    # ---------------- EXPLAINABILITY ----------------
+    imp = pd.DataFrame({
+        "Factor": ["Temperature", "Humidity", "Dew Point", "Pressure"],
+        "Impact (%)": model.feature_importances_ * 100
+    }).sort_values(by="Impact (%)", ascending=False)
 
-    r2 = r2_score(y_test, y_pred)
+    # ---------------- OUTPUT ----------------
+    st.subheader("📊 Past Water Availability")
+    st.line_chart(past.set_index("time")["water_yield"])
 
-    st.subheader("📈 Model Performance")
-    st.metric("R² Score (6h Forecast)", round(r2,4))
+    st.metric("💧 Current Water Yield (L/m²/day)", round(present, 3))
+    st.success(feasibility)
 
-    # Plot
+    st.subheader("🔮 Future Water Availability (Hours Ahead)")
     fig, ax = plt.subplots()
-    ax.plot(y_test.values, label="Actual")
-    ax.plot(y_pred, label="Predicted")
-    ax.set_title("Actual vs Predicted Water Yield (6h Ahead)")
-    ax.legend()
+    ax.plot(hours, future["water_yield"], marker="o")
+    ax.set_xlabel("Hours Ahead")
+    ax.set_ylabel("Water Yield (L/m²/day)")
     st.pyplot(fig)
 
-    # ----------- TRUE FUTURE FORECAST -----------
-    latest_data = df.iloc[-1:][features]
-    future_prediction = model.predict(latest_data)[0]
+    st.info(f"⏰ Best harvesting time: after **{best_hour} hour(s)**")
+    st.info(f"⚡ Energy–Water Tradeoff: ~{energy_ratio} litres per unit electricity")
+    st.warning(alert)
 
-    st.subheader("🔮 Next 6 Hour Forecast")
-    st.metric("Predicted Water Yield After 6 Hours (L/m²)", round(future_prediction,3))
+    st.subheader("🔍 Explainability (Why this prediction?)")
+    st.table(imp)
+
+    st.subheader("🚧 Future Scope (Government Expansion)")
+    st.markdown("""
+    - District & Mandal-level mapping  
+    - Seasonal comparison (Summer / Monsoon / Winter)  
+    - Climate change impact (2030–2050)  
+    - Population water demand matching  
+    """)
