@@ -54,6 +54,7 @@ def fetch_past_weather(lat, lon, start, end):
         "timezone": "auto"
     }
     d = requests.get(url, params=params).json()
+
     return pd.DataFrame({
         "time": pd.to_datetime(d["hourly"]["time"]),
         "temperature": d["hourly"]["temperature_2m"],
@@ -71,12 +72,14 @@ def fetch_future_weather(lat, lon, hours=12):
         "timezone": "auto"
     }
     d = requests.get(url, params=params).json()
+
     df = pd.DataFrame({
         "temperature": d["hourly"]["temperature_2m"],
         "humidity": d["hourly"]["relative_humidity_2m"],
         "dew_point": d["hourly"]["dewpoint_2m"],
         "pressure": d["hourly"]["surface_pressure"]
     })
+
     return df.head(hours)
 
 def add_water_yield(df):
@@ -84,45 +87,64 @@ def add_water_yield(df):
     return df
 
 # -------------------------------------------------
-# TRAIN MODEL
+# TRAIN MODEL USING ALL 28 STATES
 # -------------------------------------------------
 @st.cache_resource
 def train_model():
-    lat, lon = STATES["Telangana (Hyderabad)"]
+    all_data = []
+
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=7)
-    df = add_water_yield(fetch_past_weather(lat, lon, start, end))
-    X = df[["temperature", "humidity", "dew_point", "pressure"]]
-    y = df["water_yield"]
+
+    for state, (lat, lon) in STATES.items():
+        try:
+            df = fetch_past_weather(lat, lon, start, end)
+            df = add_water_yield(df)
+            all_data.append(df)
+        except:
+            continue
+
+    full_df = pd.concat(all_data, ignore_index=True)
+
+    X = full_df[["temperature", "humidity", "dew_point", "pressure"]]
+    y = full_df["water_yield"]
+
     Xtr, _, ytr, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
-    m = XGBRegressor(n_estimators=150, learning_rate=0.05, max_depth=5)
-    m.fit(Xtr, ytr)
-    return m
+
+    model = XGBRegressor(
+        n_estimators=200,
+        learning_rate=0.05,
+        max_depth=6
+    )
+
+    model.fit(Xtr, ytr)
+
+    return model
 
 model = train_model()
 
 # -------------------------------------------------
 # UI
 # -------------------------------------------------
-st.title("🌊 AquaGenesis – Decision Support System")
+st.title("🌊 AquaGenesis – Decision Support System (India Model)")
 state = st.selectbox("Select Indian State", list(STATES.keys()))
 
 if st.button("Run Full Analysis"):
+
     lat, lon = STATES[state]
 
-    # PAST
+    # PAST DATA
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=7)
     past = add_water_yield(fetch_past_weather(lat, lon, start, end))
 
-    # PRESENT
     present = past["water_yield"].iloc[-1]
 
-    # FUTURE
+    # FUTURE DATA
     future = add_water_yield(fetch_future_weather(lat, lon))
     hours = list(range(1, len(future)+1))
 
-    # ---------------- FEASIBILITY ----------------
+    # FEASIBILITY
     if present > 0.5:
         feasibility = "🟢 HIGH – Suitable for installation"
     elif present > 0.3:
@@ -130,22 +152,22 @@ if st.button("Run Full Analysis"):
     else:
         feasibility = "🔴 LOW – Not recommended"
 
-    # ---------------- BEST TIME ----------------
+    # BEST TIME
     best_hour = future["water_yield"].idxmax() + 1
 
-    # ---------------- ENERGY TRADEOFF ----------------
-    energy_ratio = round(present * 3.2, 2)  # approx
+    # ENERGY RATIO
+    energy_ratio = round(present * 3.2, 2)
 
-    # ---------------- ALERT ----------------
+    # ALERT
     alert = "⚠️ Low water availability expected" if future["water_yield"].mean() < 0.3 else "✅ Conditions are favorable"
 
-    # ---------------- EXPLAINABILITY ----------------
+    # EXPLAINABILITY
     imp = pd.DataFrame({
         "Factor": ["Temperature", "Humidity", "Dew Point", "Pressure"],
         "Impact (%)": model.feature_importances_ * 100
     }).sort_values(by="Impact (%)", ascending=False)
 
-    # ---------------- OUTPUT ----------------
+    # OUTPUT
     st.subheader("📊 Past Water Availability")
     st.line_chart(past.set_index("time")["water_yield"])
 
@@ -159,17 +181,17 @@ if st.button("Run Full Analysis"):
     ax.set_ylabel("Water Yield (L/m²/day)")
     st.pyplot(fig)
 
-    st.info(f"⏰ Best harvesting time: after **{best_hour} hour(s)**")
+    st.info(f"⏰ Best harvesting time: after {best_hour} hour(s)")
     st.info(f"⚡ Energy–Water Tradeoff: ~{energy_ratio} litres per unit electricity")
     st.warning(alert)
 
-    st.subheader("🔍 Explainability (Why this prediction?)")
+    st.subheader("🔍 Explainability (Feature Importance)")
     st.table(imp)
 
-    st.subheader("🚧 Future Scope (Government Expansion)")
+    st.subheader("🚧 Future Scope")
     st.markdown("""
-    - District & Mandal-level mapping  
-    - Seasonal comparison (Summer / Monsoon / Winter)  
-    - Climate change impact (2030–2050)  
-    - Population water demand matching  
+    - District-level mapping  
+    - Seasonal comparison  
+    - Climate change projection (2030–2050)  
+    - Population water demand integration  
     """)
