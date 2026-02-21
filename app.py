@@ -100,19 +100,84 @@ def fetch_weather(lat, lon, start, end):
 
     return df
 
-# ================= DASHBOARD =================
+# ================= TRAIN HYBRID MODEL =================
+@st.cache_resource
+def train_models():
+    all_data = []
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=90)
+
+    for lat, lon in STATES.values():
+        try:
+            df = fetch_weather(lat, lon, start, end)
+            all_data.append(df)
+        except:
+            continue
+
+    full_df = pd.concat(all_data)
+
+    X = full_df[["temperature","humidity","dew_point","pressure"]]
+    y = full_df["water_yield"]
+
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+    xgb = XGBRegressor(n_estimators=150, learning_rate=0.05, max_depth=5)
+    xgb.fit(X_train, y_train)
+
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(full_df[["water_yield"]])
+
+    window = 24
+    X_lstm, y_lstm = [], []
+    for i in range(window, len(scaled)):
+        X_lstm.append(scaled[i-window:i])
+        y_lstm.append(scaled[i])
+
+    X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
+
+    lstm = Sequential()
+    lstm.add(LSTM(32, input_shape=(window,1)))
+    lstm.add(Dense(1))
+    lstm.compile(optimizer='adam', loss='mse')
+    lstm.fit(X_lstm, y_lstm, epochs=2, batch_size=128, verbose=0)
+
+    return xgb, lstm, scaler
+
+xgb, lstm, scaler = train_models()
+
+# ================= MAIN DASHBOARD =================
 st.title("Atmospheric Water Intelligence Dashboard")
+st.markdown("Hybrid AI Model trained on real weather data from 28 Indian States.")
 
 if run:
 
     lat, lon = STATES[state]
 
-    # -------- Seasonal Comparison (Real Data, Ordered) --------
+    # -------- Past 7 Days --------
+    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
+
+    st.subheader("Past 7 Days Water Availability")
+
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(
+        x=past["time"],
+        y=past["water_yield"],
+        mode="lines",
+        line=dict(width=3)
+    ))
+
+    fig1.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Water Yield (L/m²/day)"
+    )
+
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # -------- Seasonal Comparison (Ordered Dec → Nov) --------
     season_df = fetch_weather(lat, lon, date.today()-timedelta(days=365), date.today())
 
     seasonal_avg = season_df.groupby("season")["water_yield"].mean()
 
-    # Sort manually in Dec → Nov order
     seasonal_avg = seasonal_avg.reindex(
         [s for s in SEASON_ORDER if s in seasonal_avg.index]
     )
@@ -121,8 +186,8 @@ if run:
 
     st.subheader("Seasonal Water Yield Comparison (Dec → Nov Order)")
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
         x=seasonal_avg.index,
         y=seasonal_avg.values,
         marker_color=colors,
@@ -130,9 +195,54 @@ if run:
         textposition="outside"
     ))
 
-    fig.update_layout(
+    fig2.update_layout(
         xaxis_title="Season",
-        yaxis_title="Average Water Yield (L/m²/day)"
+        yaxis_title="Average Yield (L/m²/day)"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # -------- Future Prediction --------
+    forecast_url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
+        "timezone": "auto"
+    }
+
+    f = requests.get(forecast_url, params=params).json()
+
+    future_df = pd.DataFrame({
+        "temperature": f["hourly"]["temperature_2m"],
+        "humidity": f["hourly"]["relative_humidity_2m"],
+        "dew_point": f["hourly"]["dewpoint_2m"],
+        "pressure": f["hourly"]["surface_pressure"]
+    }).head(24)
+
+    xgb_pred = xgb.predict(future_df)
+
+    scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
+    lstm_input = scaled_input.reshape(1,24,1)
+    lstm_pred = scaler.inverse_transform(lstm.predict(lstm_input))[0][0]
+
+    hybrid = (np.mean(xgb_pred)+lstm_pred)/2
+
+    st.subheader("Next 24 Hour Prediction")
+
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(
+        x=list(range(1,25)),
+        y=xgb_pred,
+        mode="lines",
+        line=dict(width=3)
+    ))
+
+    fig3.update_layout(
+        xaxis_title="Hours from Now",
+        yaxis_title="Predicted Yield (L/m²/day)"
+    )
+
+    st.plotly_chart(fig3, use_container_width=True)
+
+    st.success(f"Hybrid Final Estimated Yield: {round(hybrid,3)} L/m²/day")
