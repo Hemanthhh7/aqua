@@ -1,199 +1,208 @@
 import streamlit as st
 import plotly.graph_objects as go
 import requests
-from streamlit_lottie import st_lottie
+import pandas as pd
+import numpy as np
+from datetime import date, timedelta
 
-st.set_page_config(layout="wide")
+from xgboost import XGBRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
 
-# ==================== FULL 3D WATER BACKGROUND ====================
-st.markdown("""
-<style>
+st.set_page_config(page_title="AquaGenesis Intelligence", layout="wide")
 
-/* Remove default padding */
-.block-container {
-    padding-top: 0rem;
+# ================= SIDEBAR =================
+st.sidebar.title("🌊 AquaGenesis")
+st.sidebar.markdown("AI Atmospheric Water Intelligence")
+
+STATES = {
+    "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
+    "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
+    "Assam (Dispur)": (26.1408, 91.7900),
+    "Bihar (Patna)": (25.5941, 85.1376),
+    "Chhattisgarh (Raipur)": (21.2514, 81.6296),
+    "Goa (Panaji)": (15.4909, 73.8278),
+    "Gujarat (Gandhinagar)": (23.2156, 72.6369),
+    "Haryana (Chandigarh)": (30.7333, 76.7794),
+    "Himachal Pradesh (Shimla)": (31.1048, 77.1734),
+    "Jharkhand (Ranchi)": (23.3441, 85.3096),
+    "Karnataka (Bengaluru)": (12.9716, 77.5946),
+    "Kerala (Thiruvananthapuram)": (8.5241, 76.9366),
+    "Madhya Pradesh (Bhopal)": (23.2599, 77.4126),
+    "Maharashtra (Mumbai)": (19.0760, 72.8777),
+    "Manipur (Imphal)": (24.8170, 93.9368),
+    "Meghalaya (Shillong)": (25.5788, 91.8933),
+    "Mizoram (Aizawl)": (23.7271, 92.7176),
+    "Nagaland (Kohima)": (25.6751, 94.1086),
+    "Odisha (Bhubaneswar)": (20.2961, 85.8245),
+    "Punjab (Chandigarh)": (30.7333, 76.7794),
+    "Rajasthan (Jaipur)": (26.9124, 75.7873),
+    "Sikkim (Gangtok)": (27.3389, 88.6065),
+    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
+    "Telangana (Hyderabad)": (17.3850, 78.4867),
+    "Tripura (Agartala)": (23.8315, 91.2868),
+    "Uttar Pradesh (Lucknow)": (26.8467, 80.9462),
+    "Uttarakhand (Dehradun)": (30.3165, 78.0322),
+    "West Bengal (Kolkata)": (22.5726, 88.3639)
 }
 
-/* Full screen animated canvas */
-#water-bg {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    z-index: -1;
-    overflow: hidden;
-}
+state = st.sidebar.selectbox("Select State", list(STATES.keys()))
+run = st.sidebar.button("Run Full Analysis")
 
-/* Glass Card */
-.glass {
-    background: rgba(255,255,255,0.18);
-    backdrop-filter: blur(25px);
-    -webkit-backdrop-filter: blur(25px);
-    border-radius: 35px;
-    padding: 45px;
-    box-shadow: 0 8px 60px rgba(0,0,0,0.15);
-    border: 1px solid rgba(255,255,255,0.3);
-    margin-bottom: 60px;
-}
+# ================= DATA FETCH =================
+def fetch_weather(lat, lon, start, end):
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "start_date": start,
+        "end_date": end,
+        "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
+        "timezone": "auto"
+    }
+    r = requests.get(url, params=params).json()
 
-/* Hero */
-.hero {
-    text-align: center;
-    padding-top: 120px;
-    padding-bottom: 60px;
-}
+    df = pd.DataFrame({
+        "time": pd.to_datetime(r["hourly"]["time"]),
+        "temperature": r["hourly"]["temperature_2m"],
+        "humidity": r["hourly"]["relative_humidity_2m"],
+        "dew_point": r["hourly"]["dewpoint_2m"],
+        "pressure": r["hourly"]["surface_pressure"]
+    }).dropna()
 
-.hero h1 {
-    font-size: 70px;
-    font-weight: 800;
-    color: #0f172a;
-}
+    df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
+    df["month"] = df["time"].dt.month
+    df["season"] = df["month"].apply(
+        lambda m: "Winter" if m in [12,1,2] else
+        "Summer" if m in [3,4,5] else
+        "Monsoon" if m in [6,7,8,9] else
+        "Post-Monsoon"
+    )
 
-.hero p {
-    font-size: 22px;
-    color: #334155;
-}
+    return df
 
-/* Glow effect */
-.glow {
-    box-shadow: 0 0 40px rgba(37,99,235,0.4);
-}
+# ================= TRAIN HYBRID MODEL =================
+@st.cache_resource
+def train_models():
+    all_data = []
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=90)
 
-/* Metric box */
-.metric {
-    background: rgba(255,255,255,0.25);
-    backdrop-filter: blur(20px);
-    border-radius: 30px;
-    padding: 40px;
-    text-align: center;
-    font-size: 24px;
-    font-weight: 700;
-    color: #0f172a;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.15);
-}
+    for lat, lon in STATES.values():
+        try:
+            df = fetch_weather(lat, lon, start, end)
+            all_data.append(df)
+        except:
+            continue
 
-</style>
+    full_df = pd.concat(all_data)
 
-<div id="water-bg">
-<canvas id="canvas"></canvas>
-</div>
+    X = full_df[["temperature","humidity","dew_point","pressure"]]
+    y = full_df["water_yield"]
 
-<script>
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-let waves = [];
+    xgb = XGBRegressor(n_estimators=150, learning_rate=0.05, max_depth=5)
+    xgb.fit(X_train, y_train)
 
-for(let i=0;i<5;i++){
-    waves.push({
-        y: Math.random()*canvas.height,
-        length: Math.random()*200+200,
-        amplitude: Math.random()*30+20,
-        speed: Math.random()*0.02+0.01
-    });
-}
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(full_df[["water_yield"]])
 
-function animate(){
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.fillStyle = "#e0f2fe";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
+    window = 24
+    X_lstm, y_lstm = [], []
+    for i in range(window, len(scaled)):
+        X_lstm.append(scaled[i-window:i])
+        y_lstm.append(scaled[i])
 
-    waves.forEach(wave=>{
-        ctx.beginPath();
-        for(let x=0;x<canvas.width;x++){
-            let y = wave.y + Math.sin(x*0.01+Date.now()*wave.speed)*wave.amplitude;
-            ctx.lineTo(x,y);
-        }
-        ctx.strokeStyle="rgba(37,99,235,0.15)";
-        ctx.lineWidth=3;
-        ctx.stroke();
-    });
+    X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
 
-    requestAnimationFrame(animate);
-}
-animate();
-</script>
-""", unsafe_allow_html=True)
+    lstm = Sequential()
+    lstm.add(LSTM(32, input_shape=(window,1)))
+    lstm.add(Dense(1))
+    lstm.compile(optimizer='adam', loss='mse')
+    lstm.fit(X_lstm, y_lstm, epochs=2, batch_size=128, verbose=0)
 
-# ==================== HERO ====================
-st.markdown("""
-<div class="hero">
-<h1>🌊 AquaGenesis</h1>
-<p>Atmospheric Water Intelligence Engine</p>
-</div>
-""", unsafe_allow_html=True)
+    return xgb, lstm, scaler
 
-# ==================== LOTTIE ====================
-def load_lottie(url):
-    return requests.get(url).json()
+xgb, lstm, scaler = train_models()
 
-water = load_lottie("https://assets10.lottiefiles.com/packages/lf20_j1adxtyb.json")
-st_lottie(water, height=300)
+# ================= MAIN DASHBOARD =================
+st.title("Atmospheric Water Intelligence Dashboard")
+st.markdown("This system predicts atmospheric water availability using a hybrid AI model trained on 28 Indian states.")
 
-# ==================== METRICS ====================
-col1, col2, col3 = st.columns(3)
+if run:
 
-with col1:
-    st.markdown('<div class="metric glow">💧 Hybrid Yield<br><br>0.71 L/m²/day</div>', unsafe_allow_html=True)
+    lat, lon = STATES[state]
 
-with col2:
-    st.markdown('<div class="metric glow">⏰ Best Time<br><br>Next 3 Hours</div>', unsafe_allow_html=True)
+    # ---- Past 7 Days ----
+    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
 
-with col3:
-    st.markdown('<div class="metric glow">🌦 Feasibility<br><br>High</div>', unsafe_allow_html=True)
+    st.subheader("Past 7 Days Water Availability")
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(
+        x=past["time"],
+        y=past["water_yield"],
+        mode="lines",
+        name="Water Yield"
+    ))
+    fig1.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Water Yield (L/m²/day)"
+    )
+    st.plotly_chart(fig1, use_container_width=True)
 
-st.markdown("<br><br>", unsafe_allow_html=True)
+    # ---- Seasonal ----
+    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=90), date.today())
+    seasonal_avg = season_df.groupby("season")["water_yield"].mean()
 
-# ==================== PAST GRAPH ====================
-st.markdown('<div class="glass glow">', unsafe_allow_html=True)
+    st.subheader("Seasonal Water Yield Comparison")
+    fig2 = go.Figure([go.Bar(x=seasonal_avg.index, y=seasonal_avg.values)])
+    fig2.update_layout(
+        xaxis_title="Season",
+        yaxis_title="Average Yield (L/m²/day)"
+    )
+    st.plotly_chart(fig2, use_container_width=True)
 
-st.markdown("## 📊 Past 7 Days Atmospheric Water")
+    # ---- Future ----
+    forecast_url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
+        "timezone": "auto"
+    }
 
-days = list(range(1,8))
-values = [0.42,0.48,0.39,0.55,0.51,0.60,0.47]
+    f = requests.get(forecast_url, params=params).json()
 
-fig = go.Figure()
-fig.add_trace(go.Scatter(
-    x=days,
-    y=values,
-    mode='lines+markers',
-    line=dict(color='#2563EB', width=5),
-    marker=dict(size=12)
-))
-fig.update_layout(
-    xaxis_title="Days",
-    yaxis_title="Water Yield (L/m²/day)",
-    template="plotly_white",
-    height=450
-)
+    future_df = pd.DataFrame({
+        "temperature": f["hourly"]["temperature_2m"],
+        "humidity": f["hourly"]["relative_humidity_2m"],
+        "dew_point": f["hourly"]["dewpoint_2m"],
+        "pressure": f["hourly"]["surface_pressure"]
+    }).head(24)
 
-st.plotly_chart(fig, use_container_width=True)
-st.markdown('</div>', unsafe_allow_html=True)
+    xgb_pred = xgb.predict(future_df)
 
-# ==================== FUTURE GRAPH ====================
-st.markdown('<div class="glass glow">', unsafe_allow_html=True)
+    scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
+    lstm_input = scaled_input.reshape(1,24,1)
+    lstm_pred = scaler.inverse_transform(lstm.predict(lstm_input))[0][0]
 
-st.markdown("## 🔮 24 Hour AI Prediction")
+    hybrid = (np.mean(xgb_pred)+lstm_pred)/2
 
-hours = list(range(1,25))
-future = [0.35+i*0.02 for i in range(24)]
+    st.subheader("Next 24 Hour Prediction")
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(
+        x=list(range(1,25)),
+        y=xgb_pred,
+        mode="lines",
+        name="Predicted Yield"
+    ))
+    fig3.update_layout(
+        xaxis_title="Hours from Now",
+        yaxis_title="Predicted Yield (L/m²/day)"
+    )
+    st.plotly_chart(fig3, use_container_width=True)
 
-fig2 = go.Figure()
-fig2.add_trace(go.Scatter(
-    x=hours,
-    y=future,
-    mode='lines',
-    line=dict(color='#14B8A6', width=5)
-))
-fig2.update_layout(
-    xaxis_title="Hours From Now",
-    yaxis_title="Predicted Yield",
-    template="plotly_white",
-    height=450
-)
-
-st.plotly_chart(fig2, use_container_width=True)
-st.markdown('</div>', unsafe_allow_html=True)
+    st.success(f"Hybrid Final Estimated Yield: {round(hybrid,3)} L/m²/day")
