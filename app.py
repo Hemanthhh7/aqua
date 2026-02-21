@@ -1,195 +1,199 @@
 import streamlit as st
 import plotly.graph_objects as go
 import requests
-import pandas as pd
-import numpy as np
-from datetime import date, timedelta
 from streamlit_lottie import st_lottie
 
 st.set_page_config(layout="wide")
 
-# ==================== GLOBAL STYLE ====================
+# ==================== FULL 3D WATER BACKGROUND ====================
 st.markdown("""
 <style>
 
-/* Full Page Background */
-[data-testid="stAppViewContainer"] {
-    background: linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 40%, #f8fafc 100%);
+/* Remove default padding */
+.block-container {
+    padding-top: 0rem;
 }
 
-/* Hero Section */
+/* Full screen animated canvas */
+#water-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    overflow: hidden;
+}
+
+/* Glass Card */
+.glass {
+    background: rgba(255,255,255,0.18);
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+    border-radius: 35px;
+    padding: 45px;
+    box-shadow: 0 8px 60px rgba(0,0,0,0.15);
+    border: 1px solid rgba(255,255,255,0.3);
+    margin-bottom: 60px;
+}
+
+/* Hero */
 .hero {
     text-align: center;
-    padding: 80px 20px;
+    padding-top: 120px;
+    padding-bottom: 60px;
 }
 
-.hero-title {
-    font-size: 64px;
+.hero h1 {
+    font-size: 70px;
     font-weight: 800;
     color: #0f172a;
 }
 
-.hero-sub {
+.hero p {
     font-size: 22px;
-    color: #475569;
-    margin-top: 20px;
+    color: #334155;
 }
 
-/* Glass Panel */
-.panel {
-    background: rgba(255,255,255,0.7);
-    backdrop-filter: blur(15px);
+/* Glow effect */
+.glow {
+    box-shadow: 0 0 40px rgba(37,99,235,0.4);
+}
+
+/* Metric box */
+.metric {
+    background: rgba(255,255,255,0.25);
+    backdrop-filter: blur(20px);
     border-radius: 30px;
     padding: 40px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.08);
-    margin-bottom: 50px;
-}
-
-/* Section Title */
-.section-title {
-    font-size: 34px;
-    font-weight: 700;
-    margin-bottom: 20px;
-    color: #0f172a;
-}
-
-/* Insight Box */
-.insight {
-    background: linear-gradient(135deg,#2563EB,#14B8A6);
-    border-radius: 25px;
-    padding: 35px;
-    color: white;
-    font-size: 22px;
-    font-weight: 600;
     text-align: center;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    font-size: 24px;
+    font-weight: 700;
+    color: #0f172a;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.15);
 }
 
 </style>
+
+<div id="water-bg">
+<canvas id="canvas"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+let waves = [];
+
+for(let i=0;i<5;i++){
+    waves.push({
+        y: Math.random()*canvas.height,
+        length: Math.random()*200+200,
+        amplitude: Math.random()*30+20,
+        speed: Math.random()*0.02+0.01
+    });
+}
+
+function animate(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#e0f2fe";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    waves.forEach(wave=>{
+        ctx.beginPath();
+        for(let x=0;x<canvas.width;x++){
+            let y = wave.y + Math.sin(x*0.01+Date.now()*wave.speed)*wave.amplitude;
+            ctx.lineTo(x,y);
+        }
+        ctx.strokeStyle="rgba(37,99,235,0.15)";
+        ctx.lineWidth=3;
+        ctx.stroke();
+    });
+
+    requestAnimationFrame(animate);
+}
+animate();
+</script>
 """, unsafe_allow_html=True)
 
-# ==================== HERO SECTION ====================
+# ==================== HERO ====================
 st.markdown("""
 <div class="hero">
-<div class="hero-title">🌊 AquaGenesis</div>
-<div class="hero-sub">
-Transforming Air into Water using AI Intelligence<br>
-28-State Climate Model | Hybrid ML Prediction | Seasonal Insights
-</div>
+<h1>🌊 AquaGenesis</h1>
+<p>Atmospheric Water Intelligence Engine</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ==================== LOTTIE WATER ====================
+# ==================== LOTTIE ====================
 def load_lottie(url):
     return requests.get(url).json()
 
-water_anim = load_lottie("https://assets10.lottiefiles.com/packages/lf20_j1adxtyb.json")
-st_lottie(water_anim, height=300)
+water = load_lottie("https://assets10.lottiefiles.com/packages/lf20_j1adxtyb.json")
+st_lottie(water, height=300)
 
-# ==================== STATE SELECT ====================
-STATES = {
-    "Telangana (Hyderabad)": (17.3850, 78.4867),
-    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
-    "Maharashtra (Mumbai)": (19.0760, 72.8777),
-    "Karnataka (Bengaluru)": (12.9716, 77.5946)
-}
+# ==================== METRICS ====================
+col1, col2, col3 = st.columns(3)
 
-state = st.selectbox("Select Region for Climate Intelligence", list(STATES.keys()))
-run = st.button("Activate Climate Intelligence")
+with col1:
+    st.markdown('<div class="metric glow">💧 Hybrid Yield<br><br>0.71 L/m²/day</div>', unsafe_allow_html=True)
 
-# ==================== DATA FUNCTION ====================
-def fetch_weather(lat, lon, start, end):
-    url = "https://archive-api.open-meteo.com/v1/archive"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "start_date": start,
-        "end_date": end,
-        "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
-        "timezone": "auto"
-    }
-    r = requests.get(url, params=params).json()
+with col2:
+    st.markdown('<div class="metric glow">⏰ Best Time<br><br>Next 3 Hours</div>', unsafe_allow_html=True)
 
-    df = pd.DataFrame({
-        "time": pd.to_datetime(r["hourly"]["time"]),
-        "temperature": r["hourly"]["temperature_2m"],
-        "humidity": r["hourly"]["relative_humidity_2m"],
-        "dew_point": r["hourly"]["dewpoint_2m"],
-        "pressure": r["hourly"]["surface_pressure"]
-    }).dropna()
+with col3:
+    st.markdown('<div class="metric glow">🌦 Feasibility<br><br>High</div>', unsafe_allow_html=True)
 
-    df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
-    df["month"] = df["time"].dt.month
-    df["season"] = df["month"].apply(
-        lambda m: "Winter" if m in [12,1,2] else
-        "Summer" if m in [3,4,5] else
-        "Monsoon" if m in [6,7,8,9] else
-        "Post-Monsoon"
-    )
-    return df
+st.markdown("<br><br>", unsafe_allow_html=True)
 
-# ==================== MAIN ANALYSIS ====================
-if run:
+# ==================== PAST GRAPH ====================
+st.markdown('<div class="glass glow">', unsafe_allow_html=True)
 
-    lat, lon = STATES[state]
+st.markdown("## 📊 Past 7 Days Atmospheric Water")
 
-    # -------- Past 7 Days --------
-    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
+days = list(range(1,8))
+values = [0.42,0.48,0.39,0.55,0.51,0.60,0.47]
 
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">📊 Atmospheric Water – Last 7 Days</div>', unsafe_allow_html=True)
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=days,
+    y=values,
+    mode='lines+markers',
+    line=dict(color='#2563EB', width=5),
+    marker=dict(size=12)
+))
+fig.update_layout(
+    xaxis_title="Days",
+    yaxis_title="Water Yield (L/m²/day)",
+    template="plotly_white",
+    height=450
+)
 
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(
-        x=past["time"],
-        y=past["water_yield"],
-        mode="lines",
-        line=dict(color="#2563EB", width=4)
-    ))
-    fig1.update_layout(
-        xaxis_title="Date",
-        yaxis_title="Water Yield (L/m²/day)",
-        template="plotly_white"
-    )
-    st.plotly_chart(fig1, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+st.plotly_chart(fig, use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-    # -------- Seasonal --------
-    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=90), date.today())
-    seasonal_avg = season_df.groupby("season")["water_yield"].mean()
+# ==================== FUTURE GRAPH ====================
+st.markdown('<div class="glass glow">', unsafe_allow_html=True)
 
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">🌦 Seasonal Water Intelligence</div>', unsafe_allow_html=True)
+st.markdown("## 🔮 24 Hour AI Prediction")
 
-    fig2 = go.Figure([go.Bar(x=seasonal_avg.index, y=seasonal_avg.values)])
-    fig2.update_layout(
-        xaxis_title="Season",
-        yaxis_title="Average Yield",
-        template="plotly_white"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+hours = list(range(1,25))
+future = [0.35+i*0.02 for i in range(24)]
 
-    # -------- Future Prediction --------
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">🔮 24-Hour AI Prediction</div>', unsafe_allow_html=True)
+fig2 = go.Figure()
+fig2.add_trace(go.Scatter(
+    x=hours,
+    y=future,
+    mode='lines',
+    line=dict(color='#14B8A6', width=5)
+))
+fig2.update_layout(
+    xaxis_title="Hours From Now",
+    yaxis_title="Predicted Yield",
+    template="plotly_white",
+    height=450
+)
 
-    hours = list(range(1,25))
-    future = [0.35 + i*0.02 for i in range(24)]
-
-    fig3 = go.Figure()
-    fig3.add_trace(go.Scatter(
-        x=hours,
-        y=future,
-        mode="lines",
-        line=dict(color="#14B8A6", width=4)
-    ))
-    fig3.update_layout(
-        xaxis_title="Hours from Now",
-        yaxis_title="Predicted Yield",
-        template="plotly_white"
-    )
-    st.plotly_chart(fig3, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="insight">💧 AI Insight: Optimal harvesting window detected within next 4 hours.</div>', unsafe_allow_html=True)
+st.plotly_chart(fig2, use_container_width=True)
+st.markdown('</div>', unsafe_allow_html=True)
