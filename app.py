@@ -68,12 +68,8 @@ def fetch_weather(lat, lon, start, end):
         "pressure": d["hourly"]["surface_pressure"]
     })
 
-    return df.dropna()
+    df = df.dropna()
 
-# -------------------------------------------------
-# PREPROCESS
-# -------------------------------------------------
-def preprocess(df):
     df["water_yield"] = (
         (df["humidity"]/100) *
         (df["temperature"] - df["dew_point"]) * 0.1
@@ -81,7 +77,7 @@ def preprocess(df):
 
     df["month"] = df["time"].dt.month
 
-    def get_season(m):
+    def season(m):
         if m in [12,1,2]:
             return "Winter"
         elif m in [3,4,5]:
@@ -91,24 +87,23 @@ def preprocess(df):
         else:
             return "Post-Monsoon"
 
-    df["season"] = df["month"].apply(get_season)
+    df["season"] = df["month"].apply(season)
 
     return df
 
 # -------------------------------------------------
-# TRAIN MODELS (ALL STATES)
+# TRAIN MODELS (FASTER)
 # -------------------------------------------------
 @st.cache_resource
 def train_models():
 
     all_data = []
     end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=365)
+    start = end - timedelta(days=90)  # 🔥 Reduced to 90 days
 
     for state, (lat, lon) in STATES.items():
         try:
             df = fetch_weather(lat, lon, start, end)
-            df = preprocess(df)
             all_data.append(df)
         except:
             continue
@@ -118,11 +113,19 @@ def train_models():
     X = full_df[["temperature","humidity","dew_point","pressure"]]
     y = full_df["water_yield"]
 
-    # XGBoost
-    xgb = XGBRegressor(n_estimators=300, learning_rate=0.05, max_depth=6)
-    xgb.fit(X, y)
+    # XGBoost (Reduced size)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, shuffle=False
+    )
 
-    # LSTM
+    xgb = XGBRegressor(
+        n_estimators=150,
+        learning_rate=0.05,
+        max_depth=5
+    )
+    xgb.fit(X_train, y_train)
+
+    # LSTM (Reduced epochs)
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(full_df[["water_yield"]])
 
@@ -136,50 +139,45 @@ def train_models():
     X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
 
     lstm = Sequential()
-    lstm.add(LSTM(50, input_shape=(window,1)))
+    lstm.add(LSTM(32, input_shape=(window,1)))
     lstm.add(Dense(1))
-    lstm.compile(optimizer="adam", loss="mse")
-    lstm.fit(X_lstm, y_lstm, epochs=5, batch_size=64, verbose=0)
+    lstm.compile(optimizer='adam', loss='mse')
+    lstm.fit(X_lstm, y_lstm, epochs=2, batch_size=128, verbose=0)
 
     return xgb, lstm, scaler
 
+# Train once
+xgb, lstm, scaler = train_models()
+
 # -------------------------------------------------
-# STREAMLIT UI
+# UI
 # -------------------------------------------------
-st.title("🌊 AquaGenesis – Full Hybrid + Seasonal + 7 Week Analysis")
+st.title("🌊 AquaGenesis – Fast Hybrid Seasonal System")
 
 state = st.selectbox("Select State", list(STATES.keys()))
 
 if st.button("Run Full Analysis"):
 
-    xgb, lstm, scaler = train_models()
     lat, lon = STATES[state]
 
-    # ---------------- PAST 7 WEEKS ----------------
+    # Past 7 Days
     end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=49)
-
+    start = end - timedelta(days=7)
     past_df = fetch_weather(lat, lon, start, end)
-    past_df = preprocess(past_df)
 
-    st.subheader("📊 Past 7 Weeks Water Yield")
-    fig1, ax1 = plt.subplots()
-    ax1.plot(past_df["time"], past_df["water_yield"])
-    ax1.set_ylabel("Water Yield")
-    st.pyplot(fig1)
+    st.subheader("📊 Past 7 Days Water Yield")
+    st.line_chart(past_df.set_index("time")["water_yield"])
 
-    # ---------------- SEASONAL COMPARISON ----------------
+    # Seasonal Comparison (90-day seasonal avg)
+    year_start = end - timedelta(days=90)
+    year_df = fetch_weather(lat, lon, year_start, end)
+
+    seasonal_avg = year_df.groupby("season")["water_yield"].mean()
+
     st.subheader("📈 Seasonal Comparison")
-    seasonal_avg = past_df.groupby("season")["water_yield"].mean()
+    st.bar_chart(seasonal_avg)
 
-    fig2, ax2 = plt.subplots()
-    seasonal_avg.plot(kind="bar", ax=ax2)
-    ax2.set_ylabel("Average Water Yield")
-    st.pyplot(fig2)
-
-    st.table(seasonal_avg.reset_index())
-
-    # ---------------- FUTURE PREDICTION ----------------
+    # Future Forecast
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -201,12 +199,13 @@ if st.button("Run Full Analysis"):
 
     scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
     lstm_input = scaled_input.reshape(1,24,1)
-    lstm_pred = scaler.inverse_transform(
-        lstm.predict(lstm_input)
-    )[0][0]
+    lstm_pred_scaled = lstm.predict(lstm_input, verbose=0)
+    lstm_pred = scaler.inverse_transform(lstm_pred_scaled)[0][0]
 
-    hybrid = (np.mean(xgb_pred) + lstm_pred)/2
+    hybrid_pred = (np.mean(xgb_pred) + lstm_pred) / 2
 
-    st.subheader("🔮 Hybrid Future Prediction")
+    st.subheader("🔮 Hybrid Prediction")
     st.line_chart(xgb_pred)
-    st.metric("Hybrid Final Prediction", round(hybrid,3))
+
+    st.metric("LSTM Next Hour", round(lstm_pred,3))
+    st.metric("Hybrid Final Estimate", round(hybrid_pred,3))
