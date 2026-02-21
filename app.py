@@ -23,7 +23,7 @@ SEASON_COLORS = {
 
 # ================= SIDEBAR =================
 st.sidebar.title("🌊 AquaGenesis")
-st.sidebar.markdown("AI Atmospheric Water Intelligence")
+st.sidebar.markdown("Hybrid AI Atmospheric Water Intelligence")
 
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
@@ -59,7 +59,7 @@ STATES = {
 state = st.sidebar.selectbox("Select State", list(STATES.keys()))
 run = st.sidebar.button("Run Full Analysis")
 
-# ================= DATA FETCH =================
+# ================= FETCH WEATHER =================
 def fetch_weather(lat, lon, start, end):
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
@@ -93,7 +93,7 @@ def fetch_weather(lat, lon, start, end):
 
     return df
 
-# ================= TRAIN MODEL =================
+# ================= TRAIN HYBRID MODEL =================
 @st.cache_resource
 def train_models():
     all_data = []
@@ -122,7 +122,6 @@ def train_models():
 
     window = 24
     X_lstm, y_lstm = [], []
-
     for i in range(window, len(scaled)):
         X_lstm.append(scaled[i-window:i])
         y_lstm.append(scaled[i])
@@ -139,9 +138,9 @@ def train_models():
 
 xgb, lstm, scaler = train_models()
 
-# ================= DASHBOARD =================
+# ================= MAIN DASHBOARD =================
 st.title("Atmospheric Water Intelligence Dashboard")
-st.markdown("Hybrid AI Model trained across 28 Indian States.")
+st.markdown("Hybrid AI Model trained on real weather data from 28 Indian States.")
 
 if run:
 
@@ -150,16 +149,6 @@ if run:
     # -------- Past 7 Days --------
     past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
 
-    current_month = date.today().month
-    if current_month in [12,1,2]:
-        current_season = "Winter (Dec–Feb)"
-    elif current_month in [3,4,5]:
-        current_season = "Summer (Mar–May)"
-    elif current_month in [6,7,8,9]:
-        current_season = "Monsoon (Jun–Sep)"
-    else:
-        current_season = "Post-Monsoon (Oct–Nov)"
-
     st.subheader("Past 7 Days Water Availability")
 
     fig1 = go.Figure()
@@ -167,8 +156,7 @@ if run:
         x=past["time"],
         y=past["water_yield"],
         mode="lines",
-        line=dict(color=SEASON_COLORS[current_season], width=3),
-        name=current_season
+        line=dict(width=3)
     ))
 
     fig1.update_layout(
@@ -178,13 +166,14 @@ if run:
 
     st.plotly_chart(fig1, use_container_width=True)
 
-    # -------- Seasonal Comparison --------
-    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=90), date.today())
+    # -------- Seasonal Comparison (Real 1-Year Data) --------
+    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=365), date.today())
+
     seasonal_avg = season_df.groupby("season")["water_yield"].mean().reset_index()
 
     colors = [SEASON_COLORS[s] for s in seasonal_avg["season"]]
 
-    st.subheader("Seasonal Water Yield Comparison")
+    st.subheader("Seasonal Water Yield Comparison (Based on Last 1 Year Data)")
 
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(
@@ -235,8 +224,7 @@ if run:
         x=list(range(1,25)),
         y=xgb_pred,
         mode="lines",
-        line=dict(color="#0EA5E9", width=3),
-        name="Predicted Yield"
+        line=dict(width=3)
     ))
 
     fig3.update_layout(
