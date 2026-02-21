@@ -58,6 +58,7 @@ def fetch_weather(lat, lon, start, end):
         "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
         "timezone": "auto"
     }
+
     d = requests.get(url, params=params).json()
 
     df = pd.DataFrame({
@@ -66,9 +67,7 @@ def fetch_weather(lat, lon, start, end):
         "humidity": d["hourly"]["relative_humidity_2m"],
         "dew_point": d["hourly"]["dewpoint_2m"],
         "pressure": d["hourly"]["surface_pressure"]
-    })
-
-    df = df.dropna()
+    }).dropna()
 
     df["water_yield"] = (
         (df["humidity"]/100) *
@@ -92,14 +91,14 @@ def fetch_weather(lat, lon, start, end):
     return df
 
 # -------------------------------------------------
-# TRAIN MODELS (FASTER)
+# TRAIN HYBRID MODEL (FASTER - 90 DAYS)
 # -------------------------------------------------
 @st.cache_resource
 def train_models():
 
     all_data = []
     end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=90)  # 🔥 Reduced to 90 days
+    start = end - timedelta(days=90)
 
     for state, (lat, lon) in STATES.items():
         try:
@@ -113,8 +112,8 @@ def train_models():
     X = full_df[["temperature","humidity","dew_point","pressure"]]
     y = full_df["water_yield"]
 
-    # XGBoost (Reduced size)
-    X_train, X_test, y_train, y_test = train_test_split(
+    # XGBoost
+    X_train, _, y_train, _ = train_test_split(
         X, y, test_size=0.2, shuffle=False
     )
 
@@ -125,7 +124,7 @@ def train_models():
     )
     xgb.fit(X_train, y_train)
 
-    # LSTM (Reduced epochs)
+    # LSTM
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(full_df[["water_yield"]])
 
@@ -150,34 +149,52 @@ def train_models():
 xgb, lstm, scaler = train_models()
 
 # -------------------------------------------------
-# UI
+# STREAMLIT UI
 # -------------------------------------------------
-st.title("🌊 AquaGenesis – Fast Hybrid Seasonal System")
+st.title("🌊 AquaGenesis – Atmospheric Water Decision Support System")
 
 state = st.selectbox("Select State", list(STATES.keys()))
 
-if st.button("Run Full Analysis"):
+if st.button("Run Analysis"):
 
     lat, lon = STATES[state]
 
-    # Past 7 Days
+    # ---------------- PAST 7 DAYS ----------------
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=7)
+
     past_df = fetch_weather(lat, lon, start, end)
 
-    st.subheader("📊 Past 7 Days Water Yield")
-    st.line_chart(past_df.set_index("time")["water_yield"])
+    st.subheader("📊 Water Availability – Last 7 Days")
 
-    # Seasonal Comparison (90-day seasonal avg)
+    fig1, ax1 = plt.subplots()
+    ax1.plot(past_df["time"], past_df["water_yield"])
+    ax1.set_xlabel("Date & Time")
+    ax1.set_ylabel("Water Yield (Litres per m² per day)")
+    ax1.set_title("Water Available from Air – Last 7 Days")
+    plt.xticks(rotation=45)
+    st.pyplot(fig1)
+
+    st.info("Higher value means better atmospheric water harvesting opportunity.")
+
+    # ---------------- SEASONAL ----------------
     year_start = end - timedelta(days=90)
     year_df = fetch_weather(lat, lon, year_start, end)
 
     seasonal_avg = year_df.groupby("season")["water_yield"].mean()
 
-    st.subheader("📈 Seasonal Comparison")
-    st.bar_chart(seasonal_avg)
+    st.subheader("📈 Seasonal Water Availability Comparison")
 
-    # Future Forecast
+    fig2, ax2 = plt.subplots()
+    seasonal_avg.plot(kind="bar", ax=ax2)
+    ax2.set_xlabel("Season")
+    ax2.set_ylabel("Average Water Yield (Litres per m² per day)")
+    ax2.set_title("Which Season Produces More Water?")
+    st.pyplot(fig2)
+
+    st.info("Higher bar indicates better seasonal water harvesting potential.")
+
+    # ---------------- FUTURE PREDICTION ----------------
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -204,8 +221,16 @@ if st.button("Run Full Analysis"):
 
     hybrid_pred = (np.mean(xgb_pred) + lstm_pred) / 2
 
-    st.subheader("🔮 Hybrid Prediction")
-    st.line_chart(xgb_pred)
+    st.subheader("🔮 Predicted Water Availability – Next 24 Hours")
 
-    st.metric("LSTM Next Hour", round(lstm_pred,3))
-    st.metric("Hybrid Final Estimate", round(hybrid_pred,3))
+    fig3, ax3 = plt.subplots()
+    ax3.plot(range(1,25), xgb_pred)
+    ax3.set_xlabel("Hours from Now")
+    ax3.set_ylabel("Predicted Water Yield (Litres per m² per day)")
+    ax3.set_title("Next 24-Hour Atmospheric Water Prediction")
+    st.pyplot(fig3)
+
+    st.metric("LSTM Next Hour Prediction", round(lstm_pred,3))
+    st.metric("Hybrid Final Estimated Yield", round(hybrid_pred,3))
+
+    st.info("Use higher predicted values to decide optimal water harvesting time.")
