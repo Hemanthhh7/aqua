@@ -13,6 +13,14 @@ from tensorflow.keras.layers import LSTM, Dense
 
 st.set_page_config(page_title="AquaGenesis Intelligence", layout="wide")
 
+# ================= SEASON COLORS =================
+SEASON_COLORS = {
+    "Winter (Dec–Feb)": "#3B82F6",
+    "Summer (Mar–May)": "#F97316",
+    "Monsoon (Jun–Sep)": "#10B981",
+    "Post-Monsoon (Oct–Nov)": "#8B5CF6"
+}
+
 # ================= SIDEBAR =================
 st.sidebar.title("🌊 AquaGenesis")
 st.sidebar.markdown("AI Atmospheric Water Intelligence")
@@ -62,6 +70,7 @@ def fetch_weather(lat, lon, start, end):
         "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
         "timezone": "auto"
     }
+
     r = requests.get(url, params=params).json()
 
     df = pd.DataFrame({
@@ -74,16 +83,17 @@ def fetch_weather(lat, lon, start, end):
 
     df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
     df["month"] = df["time"].dt.month
+
     df["season"] = df["month"].apply(
-        lambda m: "Winter" if m in [12,1,2] else
-        "Summer" if m in [3,4,5] else
-        "Monsoon" if m in [6,7,8,9] else
-        "Post-Monsoon"
+        lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
+        "Summer (Mar–May)" if m in [3,4,5] else
+        "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
+        "Post-Monsoon (Oct–Nov)"
     )
 
     return df
 
-# ================= TRAIN HYBRID MODEL =================
+# ================= TRAIN MODEL =================
 @st.cache_resource
 def train_models():
     all_data = []
@@ -112,6 +122,7 @@ def train_models():
 
     window = 24
     X_lstm, y_lstm = [], []
+
     for i in range(window, len(scaled)):
         X_lstm.append(scaled[i-window:i])
         y_lstm.append(scaled[i])
@@ -128,44 +139,70 @@ def train_models():
 
 xgb, lstm, scaler = train_models()
 
-# ================= MAIN DASHBOARD =================
+# ================= DASHBOARD =================
 st.title("Atmospheric Water Intelligence Dashboard")
-st.markdown("This system predicts atmospheric water availability using a hybrid AI model trained on 28 Indian states.")
+st.markdown("Hybrid AI Model trained across 28 Indian States.")
 
 if run:
 
     lat, lon = STATES[state]
 
-    # ---- Past 7 Days ----
+    # -------- Past 7 Days --------
     past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
 
+    current_month = date.today().month
+    if current_month in [12,1,2]:
+        current_season = "Winter (Dec–Feb)"
+    elif current_month in [3,4,5]:
+        current_season = "Summer (Mar–May)"
+    elif current_month in [6,7,8,9]:
+        current_season = "Monsoon (Jun–Sep)"
+    else:
+        current_season = "Post-Monsoon (Oct–Nov)"
+
     st.subheader("Past 7 Days Water Availability")
+
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(
         x=past["time"],
         y=past["water_yield"],
         mode="lines",
-        name="Water Yield"
+        line=dict(color=SEASON_COLORS[current_season], width=3),
+        name=current_season
     ))
+
     fig1.update_layout(
         xaxis_title="Date",
         yaxis_title="Water Yield (L/m²/day)"
     )
+
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ---- Seasonal ----
+    # -------- Seasonal Comparison --------
     season_df = fetch_weather(lat, lon, date.today()-timedelta(days=90), date.today())
-    seasonal_avg = season_df.groupby("season")["water_yield"].mean()
+    seasonal_avg = season_df.groupby("season")["water_yield"].mean().reset_index()
+
+    colors = [SEASON_COLORS[s] for s in seasonal_avg["season"]]
 
     st.subheader("Seasonal Water Yield Comparison")
-    fig2 = go.Figure([go.Bar(x=seasonal_avg.index, y=seasonal_avg.values)])
+
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
+        x=seasonal_avg["season"],
+        y=seasonal_avg["water_yield"],
+        marker_color=colors,
+        text=seasonal_avg["water_yield"].round(3),
+        textposition="outside"
+    ))
+
     fig2.update_layout(
         xaxis_title="Season",
         yaxis_title="Average Yield (L/m²/day)"
     )
+
     st.plotly_chart(fig2, use_container_width=True)
 
-    # ---- Future ----
+    # -------- Future Prediction --------
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -192,17 +229,21 @@ if run:
     hybrid = (np.mean(xgb_pred)+lstm_pred)/2
 
     st.subheader("Next 24 Hour Prediction")
+
     fig3 = go.Figure()
     fig3.add_trace(go.Scatter(
         x=list(range(1,25)),
         y=xgb_pred,
         mode="lines",
+        line=dict(color="#0EA5E9", width=3),
         name="Predicted Yield"
     ))
+
     fig3.update_layout(
         xaxis_title="Hours from Now",
         yaxis_title="Predicted Yield (L/m²/day)"
     )
+
     st.plotly_chart(fig3, use_container_width=True)
 
     st.success(f"Hybrid Final Estimated Yield: {round(hybrid,3)} L/m²/day")
