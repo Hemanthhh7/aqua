@@ -10,34 +10,52 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from streamlit_lottie import st_lottie
 
 # ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="AquaGenesis", layout="wide")
+st.set_page_config(page_title="AquaGenesis Pro", layout="wide")
 
-# ---------------- CUSTOM UI ----------------
+# ---------------- PREMIUM CSS ----------------
 st.markdown("""
 <style>
-html, body {
-    background-color: #F8FAFC;
-    font-family: 'Inter', sans-serif;
+
+/* Background */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #F8FAFC, #EEF2F7);
 }
+
+/* Sidebar */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1E293B, #0F172A);
+}
+
+/* Sidebar text */
+[data-testid="stSidebar"] * {
+    color: white !important;
+}
+
+/* Main Title */
 .main-title {
-    font-size: 44px;
+    font-size: 48px;
     font-weight: 700;
     color: #0F172A;
 }
+
+/* Subtitle */
 .subtitle {
     font-size: 18px;
     color: #475569;
 }
+
+/* Card */
 .card {
     background: white;
     padding: 30px;
-    border-radius: 18px;
-    box-shadow: 0px 10px 30px rgba(0,0,0,0.05);
-    margin-bottom: 25px;
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.05);
+    margin-bottom: 30px;
 }
+
+/* Metric Card */
 .metric-card {
     background: linear-gradient(135deg, #2563EB, #14B8A6);
     padding: 25px;
@@ -46,11 +64,25 @@ html, body {
     text-align: center;
     font-size: 20px;
     font-weight: 600;
+    box-shadow: 0px 10px 25px rgba(0,0,0,0.1);
 }
+
+/* Section Title */
+.section-title {
+    font-size: 26px;
+    font-weight: 600;
+    color: #1E293B;
+    margin-bottom: 15px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- STATES (28) ----------------
+# ---------------- SIDEBAR ----------------
+st.sidebar.title("🌊 AquaGenesis Pro")
+st.sidebar.write("AI Water Intelligence Dashboard")
+
+# 28 States
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
     "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
@@ -82,7 +114,10 @@ STATES = {
     "West Bengal (Kolkata)": (22.5726, 88.3639)
 }
 
-# ---------------- DATA FETCH ----------------
+selected_state = st.sidebar.selectbox("Select State", list(STATES.keys()))
+run = st.sidebar.button("🚀 Run Analysis")
+
+# ---------------- DATA FUNCTION ----------------
 def fetch_weather(lat, lon, start, end):
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
@@ -103,7 +138,7 @@ def fetch_weather(lat, lon, start, end):
         "pressure": r["hourly"]["surface_pressure"]
     }).dropna()
 
-    df["water_yield"] = (df["humidity"]/100) * (df["temperature"] - df["dew_point"]) * 0.1
+    df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
     df["month"] = df["time"].dt.month
     df["season"] = df["month"].apply(
         lambda m: "Winter" if m in [12,1,2] else
@@ -111,10 +146,9 @@ def fetch_weather(lat, lon, start, end):
         "Monsoon" if m in [6,7,8,9] else
         "Post-Monsoon"
     )
-
     return df
 
-# ---------------- TRAIN MODELS ----------------
+# ---------------- TRAIN MODEL (FAST) ----------------
 @st.cache_resource
 def train_models():
     all_data = []
@@ -143,7 +177,6 @@ def train_models():
 
     window = 24
     X_lstm, y_lstm = [], []
-
     for i in range(window, len(scaled)):
         X_lstm.append(scaled[i-window:i])
         y_lstm.append(scaled[i])
@@ -160,49 +193,41 @@ def train_models():
 
 xgb, lstm, scaler = train_models()
 
-# ---------------- HEADER ----------------
-st.markdown('<div class="main-title">🌊 AquaGenesis Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">AI-Powered Atmospheric Water Decision Intelligence</div>', unsafe_allow_html=True)
+# ---------------- MAIN HEADER ----------------
+st.markdown('<div class="main-title">Atmospheric Water Intelligence</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Hybrid AI Model | 28-State Training | Seasonal Insights</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-state = st.selectbox("Select Indian State", list(STATES.keys()))
+if run:
 
-if st.button("Run Smart Analysis"):
+    lat, lon = STATES[selected_state]
 
-    lat, lon = STATES[state]
-
-    # -------- Past 7 Days --------
-    end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=7)
-    past_df = fetch_weather(lat, lon, start, end)
+    # Past 7 Days
+    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=past_df["time"],
-        y=past_df["water_yield"],
-        mode='lines',
-        line=dict(color='#2563EB', width=3)
+        x=past["time"],
+        y=past["water_yield"],
+        mode="lines",
+        line=dict(color="#2563EB", width=3)
     ))
     fig.update_layout(
-        title="Water Availability - Last 7 Days",
-        xaxis_title="Date & Time",
-        yaxis_title="Water Yield (Litres per m²/day)"
+        title="Last 7 Days Water Availability",
+        xaxis_title="Date",
+        yaxis_title="Water Yield (L/m²/day)"
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # -------- Seasonal Comparison --------
-    season_df = fetch_weather(lat, lon, end - timedelta(days=90), end)
+    # Seasonal
+    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=90), date.today())
     seasonal_avg = season_df.groupby("season")["water_yield"].mean()
 
     fig2 = go.Figure([go.Bar(x=seasonal_avg.index, y=seasonal_avg.values)])
-    fig2.update_layout(
-        title="Seasonal Water Yield Comparison",
-        xaxis_title="Season",
-        yaxis_title="Average Water Yield"
-    )
+    fig2.update_layout(title="Seasonal Water Yield Comparison")
     st.plotly_chart(fig2, use_container_width=True)
 
-    # -------- Future Prediction --------
+    # Future
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -221,25 +246,20 @@ if st.button("Run Smart Analysis"):
     }).head(24)
 
     xgb_pred = xgb.predict(future_df)
-
     scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
     lstm_input = scaled_input.reshape(1,24,1)
     lstm_pred = scaler.inverse_transform(lstm.predict(lstm_input))[0][0]
 
-    hybrid = (np.mean(xgb_pred) + lstm_pred) / 2
+    hybrid = (np.mean(xgb_pred)+lstm_pred)/2
 
     fig3 = go.Figure()
     fig3.add_trace(go.Scatter(
         x=list(range(1,25)),
         y=xgb_pred,
-        mode='lines',
-        line=dict(color='#14B8A6', width=3)
+        mode="lines",
+        line=dict(color="#14B8A6", width=3)
     ))
-    fig3.update_layout(
-        title="Predicted Water Yield - Next 24 Hours",
-        xaxis_title="Hours from Now",
-        yaxis_title="Predicted Yield"
-    )
+    fig3.update_layout(title="Next 24 Hour Prediction")
     st.plotly_chart(fig3, use_container_width=True)
 
     st.success(f"Hybrid Final Estimated Yield: {round(hybrid,3)} L/m²/day")
