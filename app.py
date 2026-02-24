@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dense
 
 st.set_page_config(page_title="AquaGenesis Intelligence", layout="wide")
 
-# ================= SEASON COLORS =================
+# ================= SEASON CONFIG =================
 SEASON_COLORS = {
     "Winter (Dec–Feb)": "#3B82F6",
     "Summer (Mar–May)": "#F97316",
@@ -129,6 +129,7 @@ def train_models():
 
     window = 24
     X_lstm, y_lstm = [], []
+
     for i in range(window, len(scaled)):
         X_lstm.append(scaled[i-window:i])
         y_lstm.append(scaled[i])
@@ -145,7 +146,7 @@ def train_models():
 
 xgb, lstm, scaler = train_models()
 
-# ================= MAIN DASHBOARD =================
+# ================= MAIN =================
 st.title("Atmospheric Water Intelligence Dashboard")
 st.markdown("Hybrid AI Model trained on real weather data from 28 Indian States.")
 
@@ -153,8 +154,9 @@ if run:
 
     lat, lon = STATES[state]
 
-    # -------- Past 7 Days --------
+    # ===== Past 7 Days =====
     past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
+    present = past["water_yield"].iloc[-1]
 
     st.subheader("Past 7 Days Water Availability")
 
@@ -165,19 +167,15 @@ if run:
         mode="lines",
         line=dict(width=3)
     ))
-
     fig1.update_layout(
         xaxis_title="Date",
         yaxis_title="Water Yield (L/m²/day)"
     )
-
     st.plotly_chart(fig1, use_container_width=True)
 
-    # -------- Seasonal Comparison (Ordered Dec → Nov) --------
+    # ===== Seasonal Comparison =====
     season_df = fetch_weather(lat, lon, date.today()-timedelta(days=365), date.today())
-
     seasonal_avg = season_df.groupby("season")["water_yield"].mean()
-
     seasonal_avg = seasonal_avg.reindex(
         [s for s in SEASON_ORDER if s in seasonal_avg.index]
     )
@@ -194,15 +192,13 @@ if run:
         text=seasonal_avg.values.round(3),
         textposition="outside"
     ))
-
     fig2.update_layout(
         xaxis_title="Season",
         yaxis_title="Average Yield (L/m²/day)"
     )
-
     st.plotly_chart(fig2, use_container_width=True)
 
-    # -------- Future Prediction --------
+    # ===== Future Prediction =====
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -237,12 +233,41 @@ if run:
         mode="lines",
         line=dict(width=3)
     ))
-
     fig3.update_layout(
         xaxis_title="Hours from Now",
         yaxis_title="Predicted Yield (L/m²/day)"
     )
-
     st.plotly_chart(fig3, use_container_width=True)
 
-    st.success(f"Hybrid Final Estimated Yield: {round(hybrid,3)} L/m²/day")
+    # ===== Feasibility =====
+    if hybrid > 0.5:
+        feasibility = "🟢 HIGH – Suitable for Installation"
+    elif hybrid > 0.3:
+        feasibility = "🟡 MODERATE – Seasonal Use Recommended"
+    else:
+        feasibility = "🔴 LOW – Not Recommended"
+
+    st.subheader("Feasibility Assessment")
+    st.success(feasibility)
+
+    # ===== Energy Tradeoff =====
+    energy_ratio = round(hybrid * 3.2, 2)
+    st.info(f"⚡ Energy–Water Tradeoff: ~{energy_ratio} litres per unit electricity")
+
+    # ===== Alert =====
+    if np.mean(xgb_pred) < 0.3:
+        st.warning("⚠️ Low water availability expected in next 24 hours")
+    else:
+        st.info("✅ Conditions favorable for atmospheric harvesting")
+
+    # ===== Future Scope =====
+    st.subheader("🚧 Future Scope")
+
+    st.markdown("""
+    - District & Mandal level micro-mapping  
+    - Seasonal forecasting for 5-year climate trends  
+    - Climate change projections (2030–2050)  
+    - Population water demand integration  
+    - Government deployment optimization  
+    - Real-time IoT integration with atmospheric harvesters  
+    """)
