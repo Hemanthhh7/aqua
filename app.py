@@ -127,7 +127,7 @@ def train_models():
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(full_df[["water_yield"]])
 
-    window = 24
+    window = 12
     X_lstm, y_lstm = [], []
 
     for i in range(window, len(scaled)):
@@ -146,7 +146,7 @@ def train_models():
 
 xgb, lstm, scaler = train_models()
 
-# ================= MAIN DASHBOARD =================
+# ================= MAIN =================
 st.title("Atmospheric Water Intelligence Dashboard")
 
 if run:
@@ -157,10 +157,7 @@ if run:
     past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
     present_yield = past["water_yield"].iloc[-1]
 
-    st.subheader("Current Water Yield")
-    st.metric("Water Yield (L/m²/day)", round(present_yield,3))
-
-    st.subheader("Past 7 Days Water Availability")
+    st.metric("Current Water Yield (L/m²/day)", round(present_yield,3))
 
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(
@@ -184,8 +181,6 @@ if run:
 
     colors = [SEASON_COLORS[s] for s in seasonal_avg.index]
 
-    st.subheader("Seasonal Water Yield Comparison (Dec → Nov Order)")
-
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(
         x=seasonal_avg.index,
@@ -200,7 +195,7 @@ if run:
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-    # ===== Future Prediction =====
+    # ===== Future 12 Hours =====
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -216,32 +211,30 @@ if run:
         "humidity": f["hourly"]["relative_humidity_2m"],
         "dew_point": f["hourly"]["dewpoint_2m"],
         "pressure": f["hourly"]["surface_pressure"]
-    }).head(24)
+    }).head(12)
 
     xgb_pred = xgb.predict(future_df)
 
     scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
-    lstm_input = scaled_input.reshape(1,24,1)
+    lstm_input = scaled_input.reshape(1,12,1)
     lstm_pred = scaler.inverse_transform(lstm.predict(lstm_input))[0][0]
 
     hybrid_yield = (np.mean(xgb_pred)+lstm_pred)/2
 
-    st.subheader("Next 24 Hour Prediction")
-
     fig3 = go.Figure()
     fig3.add_trace(go.Scatter(
-        x=list(range(1,25)),
+        x=list(range(1,13)),
         y=xgb_pred,
         mode="lines",
         line=dict(width=3)
     ))
     fig3.update_layout(
-        xaxis_title="Hours from Now",
+        xaxis_title="Hours from Now (Next 12 Hours)",
         yaxis_title="Predicted Water Yield (L/m²/day)"
     )
     st.plotly_chart(fig3, use_container_width=True)
 
-    st.metric("Hybrid Predicted Yield (Next 24h Avg)", round(hybrid_yield,3))
+    st.metric("Hybrid Predicted Yield (Next 12h Avg)", round(hybrid_yield,3))
 
     # ===== Feasibility =====
     if hybrid_yield > 0.5:
@@ -251,7 +244,6 @@ if run:
     else:
         feasibility = "🔴 LOW – Not Recommended"
 
-    st.subheader("Feasibility Assessment")
     st.success(feasibility)
 
     # ===== Future Scope =====
