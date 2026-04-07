@@ -13,21 +13,6 @@ from tensorflow.keras.layers import LSTM, Dense
 
 st.set_page_config(page_title="AquaGenesis Intelligence", layout="wide")
 
-# ================= SEASON CONFIG =================
-SEASON_COLORS = {
-    "Winter (Dec–Feb)": "#3B82F6",
-    "Summer (Mar–May)": "#F97316",
-    "Monsoon (Jun–Sep)": "#10B981",
-    "Post-Monsoon (Oct–Nov)": "#8B5CF6"
-}
-
-SEASON_ORDER = [
-    "Winter (Dec–Feb)",
-    "Summer (Mar–May)",
-    "Monsoon (Jun–Sep)",
-    "Post-Monsoon (Oct–Nov)"
-]
-
 # ================= SIDEBAR =================
 st.sidebar.title("🌊 AquaGenesis")
 st.sidebar.markdown("Hybrid AI Atmospheric Water Intelligence")
@@ -41,25 +26,22 @@ STATES = {
 state = st.sidebar.selectbox("Select State", list(STATES.keys()))
 run = st.sidebar.button("Run Full Analysis")
 
-# ================= SAFE API FUNCTION =================
-def safe_api_call(url, params):
-    try:
-        response = requests.get(url, params=params, timeout=10)
-
-        if response.status_code != 200:
-            st.error(f"API Error {response.status_code}")
-            return None
-
+# ================= SAFE API (RETRY) =================
+def safe_api_call(url, params, retries=3):
+    for attempt in range(retries):
         try:
-            return response.json()
-        except:
-            st.error("Invalid JSON from API")
-            st.text(response.text[:300])
-            return None
+            response = requests.get(url, params=params, timeout=10)
 
-    except Exception as e:
-        st.error(f"Request failed: {e}")
-        return None
+            if response.status_code == 200:
+                return response.json()
+
+            elif response.status_code == 502:
+                st.warning(f"Server busy... retry {attempt+1}")
+
+        except Exception:
+            st.warning(f"Retry {attempt+1} failed")
+
+    return None
 
 # ================= FETCH WEATHER =================
 def fetch_weather(lat, lon, start, end):
@@ -91,18 +73,10 @@ def fetch_weather(lat, lon, start, end):
         return df
 
     df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
-    df["month"] = df["time"].dt.month
-
-    df["season"] = df["month"].apply(
-        lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
-        "Summer (Mar–May)" if m in [3,4,5] else
-        "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
-        "Post-Monsoon (Oct–Nov)"
-    )
 
     return df
 
-# ================= TRAIN =================
+# ================= TRAIN MODEL =================
 @st.cache_resource
 def train_models():
     all_data = []
@@ -157,15 +131,20 @@ if run:
 
     lat, lon = STATES[state]
 
-    # ===== Past =====
+    # ===== Past Data =====
     past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
 
     if past.empty:
-        st.error("No past data")
+        st.error("No past data available")
         st.stop()
 
     present_yield = past["water_yield"].iloc[-1]
-    st.metric("Current Water Yield", round(present_yield,3))
+    st.metric("Current Water Yield (L/m²/day)", round(present_yield,3))
+
+    # Graph
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(x=past["time"], y=past["water_yield"], mode="lines"))
+    st.plotly_chart(fig1, use_container_width=True)
 
     # ===== Forecast =====
     forecast_url = "https://api.open-meteo.com/v1/forecast"
@@ -179,21 +158,31 @@ if run:
 
     f = safe_api_call(forecast_url, params)
 
+    # 🔥 FALLBACK SYSTEM
     if f is None or "hourly" not in f:
-        st.error("Forecast API failed")
-        st.stop()
+        st.warning("Forecast API failed → using fallback data")
 
-    future_df = pd.DataFrame({
-        "temperature": f["hourly"]["temperature_2m"],
-        "humidity": f["hourly"]["relative_humidity_2m"],
-        "dew_point": f["hourly"]["dewpoint_2m"],
-        "pressure": f["hourly"]["surface_pressure"]
-    }).head(12)
+        fallback = fetch_weather(lat, lon, date.today()-timedelta(days=1), date.today())
+
+        if fallback.empty:
+            st.error("No fallback data available")
+            st.stop()
+
+        future_df = fallback[["temperature","humidity","dew_point","pressure"]].tail(12)
+
+    else:
+        future_df = pd.DataFrame({
+            "temperature": f["hourly"]["temperature_2m"],
+            "humidity": f["hourly"]["relative_humidity_2m"],
+            "dew_point": f["hourly"]["dewpoint_2m"],
+            "pressure": f["hourly"]["surface_pressure"]
+        }).head(12)
 
     if future_df.empty:
-        st.error("No forecast data")
+        st.error("No future data available")
         st.stop()
 
+    # ===== Prediction =====
     xgb_pred = xgb.predict(future_df)
 
     scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
@@ -202,4 +191,17 @@ if run:
 
     hybrid_yield = (np.mean(xgb_pred)+lstm_pred)/2
 
-    st.metric("Hybrid Prediction", round(hybrid_yield,3))
+    # Graph
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(x=list(range(1,13)), y=xgb_pred, mode="lines"))
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.metric("Hybrid Predicted Yield (Next 12h Avg)", round(hybrid_yield,3))
+
+    # ===== Feasibility =====
+    if hybrid_yield > 0.5:
+        st.success("🟢 HIGH – Suitable for Installation")
+    elif hybrid_yield > 0.3:
+        st.warning("🟡 MODERATE – Seasonal Use Recommended")
+    else:
+        st.error("🔴 LOW – Not Recommended")
