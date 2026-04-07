@@ -13,10 +13,27 @@ from tensorflow.keras.layers import LSTM, Dense
 
 st.set_page_config(page_title="AquaGenesis Intelligence", layout="wide")
 
-# ================= SIDEBAR =================
-st.sidebar.title("🌊 AquaGenesis")
-st.sidebar.markdown("Hybrid AI Atmospheric Water Intelligence")
+# ================= SESSION =================
+session = requests.Session()
 
+def safe_api_call(url, params):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json"
+        }
+
+        response = session.get(url, params=params, headers=headers, timeout=15)
+
+        if response.status_code == 200:
+            return response.json()
+
+    except:
+        return None
+
+    return None
+
+# ================= STATES (28) =================
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
     "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
@@ -48,27 +65,12 @@ STATES = {
     "West Bengal (Kolkata)": (22.5726, 88.3639)
 }
 
-state = st.sidebar.selectbox("Select State", list(STATES.keys()))
+# ================= UI =================
+st.sidebar.title("🌊 AquaGenesis")
+st.sidebar.markdown("Hybrid AI Atmospheric Water Intelligence")
+
+state = st.sidebar.selectbox("Select State", sorted(STATES.keys()))
 run = st.sidebar.button("Run Full Analysis")
-
-# ================= SAFE API =================
-def safe_api_call(url, params):
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        return None
-    return None
-
-# ================= SYNTHETIC DATA =================
-def generate_synthetic_data(hours=24):
-    return pd.DataFrame({
-        "temperature": np.random.uniform(25, 35, hours),
-        "humidity": np.random.uniform(60, 90, hours),
-        "dew_point": np.random.uniform(20, 25, hours),
-        "pressure": np.random.uniform(1000, 1015, hours)
-    })
 
 # ================= FETCH WEATHER =================
 def fetch_weather(lat, lon, start, end):
@@ -86,31 +88,55 @@ def fetch_weather(lat, lon, start, end):
     r = safe_api_call(url, params)
 
     if r is None or "hourly" not in r:
-        df = generate_synthetic_data(168)  # 7 days
-        df["time"] = pd.date_range(end=pd.Timestamp.now(), periods=168, freq="H")
-    else:
-        df = pd.DataFrame({
-            "time": pd.to_datetime(r["hourly"]["time"]),
-            "temperature": r["hourly"]["temperature_2m"],
-            "humidity": r["hourly"]["relative_humidity_2m"],
-            "dew_point": r["hourly"]["dewpoint_2m"],
-            "pressure": r["hourly"]["surface_pressure"]
-        })
+        return pd.DataFrame()
+
+    df = pd.DataFrame({
+        "time": pd.to_datetime(r["hourly"]["time"]),
+        "temperature": r["hourly"]["temperature_2m"],
+        "humidity": r["hourly"]["relative_humidity_2m"],
+        "dew_point": r["hourly"]["dewpoint_2m"],
+        "pressure": r["hourly"]["surface_pressure"]
+    }).dropna()
+
+    if df.empty:
+        return df
 
     df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
+    df["month"] = df["time"].dt.month
+
+    df["season"] = df["month"].apply(
+        lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
+        "Summer (Mar–May)" if m in [3,4,5] else
+        "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
+        "Post-Monsoon (Oct–Nov)"
+    )
+
     return df
 
 # ================= TRAIN =================
 @st.cache_resource
 def train_models():
     all_data = []
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=30)
 
     for lat, lon in STATES.values():
-        df = generate_synthetic_data(200)
-        df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
-        all_data.append(df)
+        df = fetch_weather(lat, lon, start, end)
+        if not df.empty:
+            all_data.append(df)
 
-    full_df = pd.concat(all_data)
+    if not all_data:
+        # fallback synthetic training
+        df = pd.DataFrame({
+            "temperature": np.random.uniform(25, 35, 200),
+            "humidity": np.random.uniform(60, 90, 200),
+            "dew_point": np.random.uniform(20, 25, 200),
+            "pressure": np.random.uniform(1000, 1015, 200)
+        })
+        df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
+        full_df = df
+    else:
+        full_df = pd.concat(all_data)
 
     X = full_df[["temperature","humidity","dew_point","pressure"]]
     y = full_df["water_yield"]
@@ -134,7 +160,7 @@ def train_models():
     lstm.add(LSTM(16, input_shape=(window,1)))
     lstm.add(Dense(1))
     lstm.compile(optimizer='adam', loss='mse')
-    lstm.fit(X_lstm, y_lstm, epochs=1, batch_size=64, verbose=0)
+    lstm.fit(X_lstm, y_lstm, epochs=1, verbose=0)
 
     return xgb, lstm, scaler
 
@@ -147,29 +173,58 @@ if run:
 
     lat, lon = STATES[state]
 
-    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today())
+    # ===== PAST =====
+    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
+
+    if past.empty:
+        st.warning("Using fallback data")
+        past = pd.DataFrame({
+            "time": pd.date_range(end=pd.Timestamp.now(), periods=168, freq="H"),
+            "temperature": np.random.uniform(25, 35, 168),
+            "humidity": np.random.uniform(60, 90, 168),
+            "dew_point": np.random.uniform(20, 25, 168),
+            "pressure": np.random.uniform(1000, 1015, 168)
+        })
+        past["water_yield"] = (past["humidity"]/100)*(past["temperature"]-past["dew_point"])*0.1
 
     present_yield = past["water_yield"].iloc[-1]
     st.metric("Current Water Yield (L/m²/day)", round(present_yield,3))
 
     fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(x=past["time"], y=past["water_yield"], mode="lines"))
+    fig1.add_trace(go.Scatter(x=past["time"], y=past["water_yield"]))
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ===== Forecast =====
+    # ===== SEASONAL =====
+    if "season" not in past.columns:
+        past["month"] = past["time"].dt.month
+        past["season"] = past["month"].apply(
+            lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
+            "Summer (Mar–May)" if m in [3,4,5] else
+            "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
+            "Post-Monsoon (Oct–Nov)"
+        )
+
+    seasonal_avg = past.groupby("season")["water_yield"].mean()
+
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(x=seasonal_avg.index, y=seasonal_avg.values))
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # ===== FORECAST =====
     forecast_url = "https://api.open-meteo.com/v1/forecast"
 
     params = {
         "latitude": lat,
         "longitude": lon,
         "hourly": "temperature_2m,relative_humidity_2m,dewpoint_2m,surface_pressure",
+        "forecast_days": 2,
         "timezone": "auto"
     }
 
     f = safe_api_call(forecast_url, params)
 
     if f is None or "hourly" not in f:
-        future_df = generate_synthetic_data(12)
+        future_df = past[["temperature","humidity","dew_point","pressure"]].tail(12)
     else:
         future_df = pd.DataFrame({
             "temperature": f["hourly"]["temperature_2m"],
@@ -178,6 +233,7 @@ if run:
             "pressure": f["hourly"]["surface_pressure"]
         }).head(12)
 
+    # ===== PREDICTION =====
     xgb_pred = xgb.predict(future_df)
 
     scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
@@ -186,15 +242,27 @@ if run:
 
     hybrid_yield = (np.mean(xgb_pred)+lstm_pred)/2
 
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=list(range(1,13)), y=xgb_pred, mode="lines"))
-    st.plotly_chart(fig2, use_container_width=True)
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(x=list(range(1,13)), y=xgb_pred))
+    st.plotly_chart(fig3, use_container_width=True)
 
     st.metric("Hybrid Predicted Yield (Next 12h Avg)", round(hybrid_yield,3))
 
+    # ===== FEASIBILITY =====
     if hybrid_yield > 0.5:
-        st.success("🟢 HIGH – Suitable")
+        st.success("🟢 HIGH – Suitable for Installation")
     elif hybrid_yield > 0.3:
-        st.warning("🟡 MODERATE – Seasonal Use")
+        st.warning("🟡 MODERATE – Seasonal Use Recommended")
     else:
         st.error("🔴 LOW – Not Recommended")
+
+    # ===== FUTURE SCOPE =====
+    st.subheader("🚧 Future Scope")
+    st.markdown("""
+    - District-level micro climate mapping  
+    - Long-term seasonal forecasting  
+    - Climate change projection integration  
+    - Smart IoT device deployment  
+    - Government water planning dashboards  
+    - AI-powered installation site optimization  
+    """)
