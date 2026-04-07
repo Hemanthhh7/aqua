@@ -6,7 +6,6 @@ import numpy as np
 from datetime import date, timedelta
 
 from xgboost import XGBRegressor
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
@@ -22,18 +21,14 @@ def safe_api_call(url, params):
             "User-Agent": "Mozilla/5.0",
             "Accept": "application/json"
         }
-
         response = session.get(url, params=params, headers=headers, timeout=15)
-
         if response.status_code == 200:
             return response.json()
-
     except:
         return None
-
     return None
 
-# ================= STATES (28) =================
+# ================= STATES =================
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
     "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
@@ -102,62 +97,38 @@ def fetch_weather(lat, lon, start, end):
         return df
 
     df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
-    df["month"] = df["time"].dt.month
-
-    df["season"] = df["month"].apply(
-        lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
-        "Summer (Mar–May)" if m in [3,4,5] else
-        "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
-        "Post-Monsoon (Oct–Nov)"
-    )
 
     return df
 
 # ================= TRAIN =================
 @st.cache_resource
 def train_models():
-    all_data = []
-    end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=30)
+    df = pd.DataFrame({
+        "temperature": np.random.uniform(25, 35, 200),
+        "humidity": np.random.uniform(60, 90, 200),
+        "dew_point": np.random.uniform(20, 25, 200),
+        "pressure": np.random.uniform(1000, 1015, 200)
+    })
+    df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
 
-    for lat, lon in STATES.values():
-        df = fetch_weather(lat, lon, start, end)
-        if not df.empty:
-            all_data.append(df)
-
-    if not all_data:
-        # fallback synthetic training
-        df = pd.DataFrame({
-            "temperature": np.random.uniform(25, 35, 200),
-            "humidity": np.random.uniform(60, 90, 200),
-            "dew_point": np.random.uniform(20, 25, 200),
-            "pressure": np.random.uniform(1000, 1015, 200)
-        })
-        df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
-        full_df = df
-    else:
-        full_df = pd.concat(all_data)
-
-    X = full_df[["temperature","humidity","dew_point","pressure"]]
-    y = full_df["water_yield"]
+    X = df[["temperature","humidity","dew_point","pressure"]]
+    y = df["water_yield"]
 
     xgb = XGBRegressor(n_estimators=50)
     xgb.fit(X, y)
 
     scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(full_df[["water_yield"]])
+    scaled = scaler.fit_transform(df[["water_yield"]])
 
-    window = 12
     X_lstm, y_lstm = [], []
-
-    for i in range(window, len(scaled)):
-        X_lstm.append(scaled[i-window:i])
+    for i in range(12, len(scaled)):
+        X_lstm.append(scaled[i-12:i])
         y_lstm.append(scaled[i])
 
     X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
 
     lstm = Sequential()
-    lstm.add(LSTM(16, input_shape=(window,1)))
+    lstm.add(LSTM(16, input_shape=(12,1)))
     lstm.add(Dense(1))
     lstm.compile(optimizer='adam', loss='mse')
     lstm.fit(X_lstm, y_lstm, epochs=1, verbose=0)
@@ -173,8 +144,8 @@ if run:
 
     lat, lon = STATES[state]
 
-    # ===== PAST =====
-    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
+    # ===== CURRENT (7 DAYS) =====
+    past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today())
 
     if past.empty:
         st.warning("Using fallback data")
@@ -187,27 +158,52 @@ if run:
         })
         past["water_yield"] = (past["humidity"]/100)*(past["temperature"]-past["dew_point"])*0.1
 
-    present_yield = past["water_yield"].iloc[-1]
-    st.metric("Current Water Yield (L/m²/day)", round(present_yield,3))
+    st.metric("Current Water Yield (L/m²/day)", round(past["water_yield"].iloc[-1],3))
 
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(x=past["time"], y=past["water_yield"]))
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ===== SEASONAL =====
-    if "season" not in past.columns:
-        past["month"] = past["time"].dt.month
-        past["season"] = past["month"].apply(
-            lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
-            "Summer (Mar–May)" if m in [3,4,5] else
-            "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
-            "Post-Monsoon (Oct–Nov)"
-        )
+    # ===== SEASONAL (365 DAYS FIX) =====
+    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=365), date.today())
 
-    seasonal_avg = past.groupby("season")["water_yield"].mean()
+    if season_df.empty:
+        season_df = pd.DataFrame({
+            "time": pd.date_range(end=pd.Timestamp.now(), periods=365, freq="D"),
+            "temperature": np.random.uniform(20, 35, 365),
+            "humidity": np.random.uniform(50, 90, 365),
+            "dew_point": np.random.uniform(15, 25, 365),
+            "pressure": np.random.uniform(1000, 1015, 365)
+        })
+        season_df["water_yield"] = (season_df["humidity"]/100)*(season_df["temperature"]-season_df["dew_point"])*0.1
+
+    season_df["month"] = season_df["time"].dt.month
+
+    season_df["season"] = season_df["month"].apply(
+        lambda m: "Winter (Dec–Feb)" if m in [12,1,2] else
+        "Summer (Mar–May)" if m in [3,4,5] else
+        "Monsoon (Jun–Sep)" if m in [6,7,8,9] else
+        "Post-Monsoon (Oct–Nov)"
+    )
+
+    seasonal_avg = season_df.groupby("season")["water_yield"].mean()
+
+    season_order = [
+        "Winter (Dec–Feb)",
+        "Summer (Mar–May)",
+        "Monsoon (Jun–Sep)",
+        "Post-Monsoon (Oct–Nov)"
+    ]
+
+    seasonal_avg = seasonal_avg.reindex(season_order)
 
     fig2 = go.Figure()
-    fig2.add_trace(go.Bar(x=seasonal_avg.index, y=seasonal_avg.values))
+    fig2.add_trace(go.Bar(
+        x=seasonal_avg.index,
+        y=seasonal_avg.values,
+        text=seasonal_avg.values.round(3),
+        textposition="outside"
+    ))
     st.plotly_chart(fig2, use_container_width=True)
 
     # ===== FORECAST =====
@@ -233,7 +229,6 @@ if run:
             "pressure": f["hourly"]["surface_pressure"]
         }).head(12)
 
-    # ===== PREDICTION =====
     xgb_pred = xgb.predict(future_df)
 
     scaled_input = scaler.transform(xgb_pred.reshape(-1,1))
@@ -248,7 +243,6 @@ if run:
 
     st.metric("Hybrid Predicted Yield (Next 12h Avg)", round(hybrid_yield,3))
 
-    # ===== FEASIBILITY =====
     if hybrid_yield > 0.5:
         st.success("🟢 HIGH – Suitable for Installation")
     elif hybrid_yield > 0.3:
