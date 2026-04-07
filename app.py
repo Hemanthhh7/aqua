@@ -19,8 +19,33 @@ st.sidebar.markdown("Hybrid AI Atmospheric Water Intelligence")
 
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
+    "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
+    "Assam (Dispur)": (26.1408, 91.7900),
+    "Bihar (Patna)": (25.5941, 85.1376),
+    "Chhattisgarh (Raipur)": (21.2514, 81.6296),
+    "Goa (Panaji)": (15.4909, 73.8278),
+    "Gujarat (Gandhinagar)": (23.2156, 72.6369),
+    "Haryana (Chandigarh)": (30.7333, 76.7794),
+    "Himachal Pradesh (Shimla)": (31.1048, 77.1734),
+    "Jharkhand (Ranchi)": (23.3441, 85.3096),
+    "Karnataka (Bengaluru)": (12.9716, 77.5946),
+    "Kerala (Thiruvananthapuram)": (8.5241, 76.9366),
+    "Madhya Pradesh (Bhopal)": (23.2599, 77.4126),
+    "Maharashtra (Mumbai)": (19.0760, 72.8777),
+    "Manipur (Imphal)": (24.8170, 93.9368),
+    "Meghalaya (Shillong)": (25.5788, 91.8933),
+    "Mizoram (Aizawl)": (23.7271, 92.7176),
+    "Nagaland (Kohima)": (25.6751, 94.1086),
+    "Odisha (Bhubaneswar)": (20.2961, 85.8245),
+    "Punjab (Chandigarh)": (30.7333, 76.7794),
+    "Rajasthan (Jaipur)": (26.9124, 75.7873),
+    "Sikkim (Gangtok)": (27.3389, 88.6065),
+    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
     "Telangana (Hyderabad)": (17.3850, 78.4867),
-    "Tamil Nadu (Chennai)": (13.0827, 80.2707)
+    "Tripura (Agartala)": (23.8315, 91.2868),
+    "Uttar Pradesh (Lucknow)": (26.8467, 80.9462),
+    "Uttarakhand (Dehradun)": (30.3165, 78.0322),
+    "West Bengal (Kolkata)": (22.5726, 88.3639)
 }
 
 state = st.sidebar.selectbox("Select State", list(STATES.keys()))
