@@ -34,41 +34,37 @@ st.sidebar.markdown("Hybrid AI Atmospheric Water Intelligence")
 
 STATES = {
     "Andhra Pradesh (Amaravati)": (16.5730, 80.3575),
-    "Arunachal Pradesh (Itanagar)": (27.0844, 93.6053),
-    "Assam (Dispur)": (26.1408, 91.7900),
-    "Bihar (Patna)": (25.5941, 85.1376),
-    "Chhattisgarh (Raipur)": (21.2514, 81.6296),
-    "Goa (Panaji)": (15.4909, 73.8278),
-    "Gujarat (Gandhinagar)": (23.2156, 72.6369),
-    "Haryana (Chandigarh)": (30.7333, 76.7794),
-    "Himachal Pradesh (Shimla)": (31.1048, 77.1734),
-    "Jharkhand (Ranchi)": (23.3441, 85.3096),
-    "Karnataka (Bengaluru)": (12.9716, 77.5946),
-    "Kerala (Thiruvananthapuram)": (8.5241, 76.9366),
-    "Madhya Pradesh (Bhopal)": (23.2599, 77.4126),
-    "Maharashtra (Mumbai)": (19.0760, 72.8777),
-    "Manipur (Imphal)": (24.8170, 93.9368),
-    "Meghalaya (Shillong)": (25.5788, 91.8933),
-    "Mizoram (Aizawl)": (23.7271, 92.7176),
-    "Nagaland (Kohima)": (25.6751, 94.1086),
-    "Odisha (Bhubaneswar)": (20.2961, 85.8245),
-    "Punjab (Chandigarh)": (30.7333, 76.7794),
-    "Rajasthan (Jaipur)": (26.9124, 75.7873),
-    "Sikkim (Gangtok)": (27.3389, 88.6065),
-    "Tamil Nadu (Chennai)": (13.0827, 80.2707),
     "Telangana (Hyderabad)": (17.3850, 78.4867),
-    "Tripura (Agartala)": (23.8315, 91.2868),
-    "Uttar Pradesh (Lucknow)": (26.8467, 80.9462),
-    "Uttarakhand (Dehradun)": (30.3165, 78.0322),
-    "West Bengal (Kolkata)": (22.5726, 88.3639)
+    "Tamil Nadu (Chennai)": (13.0827, 80.2707)
 }
 
 state = st.sidebar.selectbox("Select State", list(STATES.keys()))
 run = st.sidebar.button("Run Full Analysis")
 
+# ================= SAFE API FUNCTION =================
+def safe_api_call(url, params):
+    try:
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code != 200:
+            st.error(f"API Error {response.status_code}")
+            return None
+
+        try:
+            return response.json()
+        except:
+            st.error("Invalid JSON from API")
+            st.text(response.text[:300])
+            return None
+
+    except Exception as e:
+        st.error(f"Request failed: {e}")
+        return None
+
 # ================= FETCH WEATHER =================
 def fetch_weather(lat, lon, start, end):
     url = "https://archive-api.open-meteo.com/v1/archive"
+
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -78,7 +74,10 @@ def fetch_weather(lat, lon, start, end):
         "timezone": "auto"
     }
 
-    r = requests.get(url, params=params).json()
+    r = safe_api_call(url, params)
+
+    if r is None or "hourly" not in r:
+        return pd.DataFrame()
 
     df = pd.DataFrame({
         "time": pd.to_datetime(r["hourly"]["time"]),
@@ -87,6 +86,9 @@ def fetch_weather(lat, lon, start, end):
         "dew_point": r["hourly"]["dewpoint_2m"],
         "pressure": r["hourly"]["surface_pressure"]
     }).dropna()
+
+    if df.empty:
+        return df
 
     df["water_yield"] = (df["humidity"]/100)*(df["temperature"]-df["dew_point"])*0.1
     df["month"] = df["time"].dt.month
@@ -100,19 +102,21 @@ def fetch_weather(lat, lon, start, end):
 
     return df
 
-# ================= TRAIN HYBRID MODEL =================
+# ================= TRAIN =================
 @st.cache_resource
 def train_models():
     all_data = []
     end = date.today() - timedelta(days=1)
-    start = end - timedelta(days=90)
+    start = end - timedelta(days=30)
 
     for lat, lon in STATES.values():
-        try:
-            df = fetch_weather(lat, lon, start, end)
+        df = fetch_weather(lat, lon, start, end)
+        if not df.empty:
             all_data.append(df)
-        except:
-            continue
+
+    if not all_data:
+        st.error("No training data available")
+        st.stop()
 
     full_df = pd.concat(all_data)
 
@@ -121,7 +125,7 @@ def train_models():
 
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-    xgb = XGBRegressor(n_estimators=150, learning_rate=0.05, max_depth=5)
+    xgb = XGBRegressor(n_estimators=50)
     xgb.fit(X_train, y_train)
 
     scaler = MinMaxScaler()
@@ -137,10 +141,10 @@ def train_models():
     X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
 
     lstm = Sequential()
-    lstm.add(LSTM(32, input_shape=(window,1)))
+    lstm.add(LSTM(16, input_shape=(window,1)))
     lstm.add(Dense(1))
     lstm.compile(optimizer='adam', loss='mse')
-    lstm.fit(X_lstm, y_lstm, epochs=2, batch_size=128, verbose=0)
+    lstm.fit(X_lstm, y_lstm, epochs=1, batch_size=64, verbose=0)
 
     return xgb, lstm, scaler
 
@@ -153,50 +157,19 @@ if run:
 
     lat, lon = STATES[state]
 
-    # ===== Past 7 Days =====
+    # ===== Past =====
     past = fetch_weather(lat, lon, date.today()-timedelta(days=7), date.today()-timedelta(days=1))
+
+    if past.empty:
+        st.error("No past data")
+        st.stop()
+
     present_yield = past["water_yield"].iloc[-1]
+    st.metric("Current Water Yield", round(present_yield,3))
 
-    st.metric("Current Water Yield (L/m²/day)", round(present_yield,3))
-
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(
-        x=past["time"],
-        y=past["water_yield"],
-        mode="lines",
-        line=dict(width=3)
-    ))
-    fig1.update_layout(
-        xaxis_title="Date",
-        yaxis_title="Water Yield (L/m²/day)"
-    )
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # ===== Seasonal =====
-    season_df = fetch_weather(lat, lon, date.today()-timedelta(days=365), date.today())
-    seasonal_avg = season_df.groupby("season")["water_yield"].mean()
-    seasonal_avg = seasonal_avg.reindex(
-        [s for s in SEASON_ORDER if s in seasonal_avg.index]
-    )
-
-    colors = [SEASON_COLORS[s] for s in seasonal_avg.index]
-
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(
-        x=seasonal_avg.index,
-        y=seasonal_avg.values,
-        marker_color=colors,
-        text=seasonal_avg.values.round(3),
-        textposition="outside"
-    ))
-    fig2.update_layout(
-        xaxis_title="Season",
-        yaxis_title="Average Water Yield (L/m²/day)"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # ===== Future 12 Hours =====
+    # ===== Forecast =====
     forecast_url = "https://api.open-meteo.com/v1/forecast"
+
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -204,7 +177,11 @@ if run:
         "timezone": "auto"
     }
 
-    f = requests.get(forecast_url, params=params).json()
+    f = safe_api_call(forecast_url, params)
+
+    if f is None or "hourly" not in f:
+        st.error("Forecast API failed")
+        st.stop()
 
     future_df = pd.DataFrame({
         "temperature": f["hourly"]["temperature_2m"],
@@ -212,6 +189,10 @@ if run:
         "dew_point": f["hourly"]["dewpoint_2m"],
         "pressure": f["hourly"]["surface_pressure"]
     }).head(12)
+
+    if future_df.empty:
+        st.error("No forecast data")
+        st.stop()
 
     xgb_pred = xgb.predict(future_df)
 
@@ -221,38 +202,4 @@ if run:
 
     hybrid_yield = (np.mean(xgb_pred)+lstm_pred)/2
 
-    fig3 = go.Figure()
-    fig3.add_trace(go.Scatter(
-        x=list(range(1,13)),
-        y=xgb_pred,
-        mode="lines",
-        line=dict(width=3)
-    ))
-    fig3.update_layout(
-        xaxis_title="Hours from Now (Next 12 Hours)",
-        yaxis_title="Predicted Water Yield (L/m²/day)"
-    )
-    st.plotly_chart(fig3, use_container_width=True)
-
-    st.metric("Hybrid Predicted Yield (Next 12h Avg)", round(hybrid_yield,3))
-
-    # ===== Feasibility =====
-    if hybrid_yield > 0.5:
-        feasibility = "🟢 HIGH – Suitable for Installation"
-    elif hybrid_yield > 0.3:
-        feasibility = "🟡 MODERATE – Seasonal Use Recommended"
-    else:
-        feasibility = "🔴 LOW – Not Recommended"
-
-    st.success(feasibility)
-
-    # ===== Future Scope =====
-    st.subheader("🚧 Future Scope")
-    st.markdown("""
-    - District-level micro climate mapping  
-    - Long-term seasonal forecasting  
-    - Climate change projection integration  
-    - Smart IoT device deployment  
-    - Government water planning dashboards  
-    - AI-powered installation site optimization  
-    """)
+    st.metric("Hybrid Prediction", round(hybrid_yield,3))
