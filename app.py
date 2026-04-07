@@ -26,20 +26,26 @@ STATES = {
 state = st.sidebar.selectbox("Select State", list(STATES.keys()))
 run = st.sidebar.button("Run Full Analysis")
 
-# ================= SAFE API (RETRY) =================
+# ================= SAFE API (RETRY + HEADERS) =================
 def safe_api_call(url, params, retries=3):
+    headers = {"User-Agent": "Mozilla/5.0"}
+
     for attempt in range(retries):
         try:
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=20
+            )
 
             if response.status_code == 200:
                 return response.json()
+            else:
+                st.warning(f"API Error {response.status_code} (retry {attempt+1})")
 
-            elif response.status_code == 502:
-                st.warning(f"Server busy... retry {attempt+1}")
-
-        except Exception:
-            st.warning(f"Retry {attempt+1} failed")
+        except Exception as e:
+            st.warning(f"Retry {attempt+1} failed: {str(e)}")
 
     return None
 
@@ -141,7 +147,6 @@ if run:
     present_yield = past["water_yield"].iloc[-1]
     st.metric("Current Water Yield (L/m²/day)", round(present_yield,3))
 
-    # Graph
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(x=past["time"], y=past["water_yield"], mode="lines"))
     st.plotly_chart(fig1, use_container_width=True)
@@ -158,17 +163,24 @@ if run:
 
     f = safe_api_call(forecast_url, params)
 
-    # 🔥 FALLBACK SYSTEM
+    # ===== FALLBACK SYSTEM =====
     if f is None or "hourly" not in f:
-        st.warning("Forecast API failed → using fallback data")
+        st.warning("⚠️ Live API failed → using fallback system")
 
         fallback = fetch_weather(lat, lon, date.today()-timedelta(days=1), date.today())
 
-        if fallback.empty:
-            st.error("No fallback data available")
-            st.stop()
+        if not fallback.empty:
+            future_df = fallback[["temperature","humidity","dew_point","pressure"]].tail(12)
 
-        future_df = fallback[["temperature","humidity","dew_point","pressure"]].tail(12)
+        else:
+            st.warning("Using synthetic demo data")
+
+            future_df = pd.DataFrame({
+                "temperature": np.random.uniform(25, 35, 12),
+                "humidity": np.random.uniform(60, 90, 12),
+                "dew_point": np.random.uniform(20, 25, 12),
+                "pressure": np.random.uniform(1000, 1015, 12)
+            })
 
     else:
         future_df = pd.DataFrame({
@@ -191,7 +203,6 @@ if run:
 
     hybrid_yield = (np.mean(xgb_pred)+lstm_pred)/2
 
-    # Graph
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(x=list(range(1,13)), y=xgb_pred, mode="lines"))
     st.plotly_chart(fig2, use_container_width=True)
