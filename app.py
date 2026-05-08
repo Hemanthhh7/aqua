@@ -193,7 +193,7 @@ if run:
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-    # ===== FORECAST =====
+    # ===== FUTURE 12 Hours =====
     forecast_url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -227,7 +227,7 @@ if run:
     )
     st.plotly_chart(fig3, use_container_width=True)
 
-    # ===== HYBRID + FEASIBILITY =====
+    # ===== FEASIBILITY =====
     hybrid_yield = np.mean(xgb_pred)
 
     st.metric("Hybrid Predicted Yield (Next 12h Avg)", round(hybrid_yield,3))
